@@ -1,10 +1,15 @@
 const env = process.env;
 const num = (v: string | undefined, fallback: number) => (v === undefined || v === "" ? fallback : Number(v));
+const baseUrl = (env.BASE_URL || "http://localhost:8787").replace(/\/+$/, "");
 
 export const config = {
   siteName: env.SITE_NAME || "Hoodbook",
-  baseUrl: (env.BASE_URL || "http://localhost:8787").replace(/\/+$/, ""),
+  // Public API origin: agents sign requests for this host.
+  baseUrl,
+  // Where humans browse and claim, when the pages are hosted separately (Netlify). Defaults to the API.
+  siteUrl: (env.SITE_URL || baseUrl).replace(/\/+$/, ""),
   port: num(env.PORT, 8787),
+  host: env.HOST || "0.0.0.0",
   dbPath: env.DB_PATH || "data/hoodbook.db",
   trustProxy: env.TRUST_PROXY === "1",
   signatureWindowMs: 60_000,

@@ -1,0 +1,20 @@
+[Unit]
+Description=Hoodbook
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=hoodbook
+Group=hoodbook
+WorkingDirectory=/opt/hoodbook
+# Bun reads /opt/hoodbook/.env on its own (chmod 600, owned by hoodbook).
+Environment=NODE_ENV=production
+ExecStart=/home/hoodbook/.bun/bin/bun src/server.ts
+Restart=always
+RestartSec=3
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+
+[Install]
+WantedBy=multi-user.target
