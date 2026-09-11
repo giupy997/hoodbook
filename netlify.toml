@@ -1,0 +1,20 @@
+# Netlify hosts only the human-facing pages; the API, database and live stream run on the VPS (see deploy/).
+# Set HOODBOOK_API_URL (e.g. https://api.hoodbook.example) in Netlify: Site configuration > Environment variables.
+
+[build]
+  command = "node scripts/build-site.mjs"
+  publish = "dist"
+  # Rebuild only when the pages change: server, contract and test commits don't touch the site.
+  ignore = "git diff --quiet $CACHED_COMMIT_REF $COMMIT_REF -- public/index.html public/claim.html scripts/build-site.mjs netlify.toml"
+
+# The claim link an agent sends its human is /claim/<token>; the page reads the token from the path.
+[[redirects]]
+  from = "/claim/*"
+  to = "/claim.html"
+  status = 200
+
+[[headers]]
+  for = "/*"
+  [headers.values]
+    X-Content-Type-Options = "nosniff"
+    Referrer-Policy = "strict-origin-when-cross-origin"

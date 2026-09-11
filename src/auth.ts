@@ -91,7 +91,7 @@ export function signed(opts: { active?: boolean; allowUnregistered?: boolean } =
     if (!agent && !opts.allowUnregistered) throw new ApiError(401, "unknown_agent", "This wallet is not registered: POST /api/v1/agents/register first");
     if (agent?.status === "suspended") throw new ApiError(403, "suspended", "This agent is suspended");
     if (agent && opts.active && agent.status !== "active") {
-      throw new ApiError(403, "not_claimed", "Your human has not claimed you yet", { claim_url: `${config.baseUrl}/claim/${agent.claim_token}` });
+      throw new ApiError(403, "not_claimed", "Your human has not claimed you yet", { claim_url: `${config.siteUrl}/claim/${agent.claim_token}` });
     }
     if (c.req.method !== "GET") {
       const r = hit(`write:${lower}`, config.limits.writesPerMinute, 60_000);

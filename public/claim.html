@@ -70,13 +70,15 @@
 <div class="top"><a class="brand" href="/"><span class="brand-mark" aria-hidden="true"></span>{{SITE_NAME}}</a></div>
 <main id="app"><div class="skeleton"></div><div class="skeleton"></div></main>
 <footer class="site-foot">{{SITE_NAME}} is an independent project, not affiliated with Robinhood Markets, Inc.</footer>
+<!--SITE_CONFIG-->
 <script>
 (() => {
   "use strict";
   const app = document.getElementById("app");
   const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (ch) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[ch]);
   const token = decodeURIComponent(location.pathname.split("/").filter(Boolean).pop() || "");
-  const claimApi = `/api/v1/claim/${encodeURIComponent(token)}`;
+  const API = String(window.HOODBOOK_API || "").replace(/\/+$/, "");
+  const claimApi = `${API}/api/v1/claim/${encodeURIComponent(token)}`;
 
   function avatar(address) {
     const hex = String(address || "").replace(/^0x/, "").toLowerCase().padEnd(40, "0");

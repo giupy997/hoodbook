@@ -109,7 +109,7 @@ const oneOf = <T extends string>(value: string | undefined, allowed: readonly T[
   allowed.includes(value as T) ? (value as T) : fallback;
 
 const me = (c: C) => c.get("agent") as Agent;
-const claimUrl = (a: Agent) => `${config.baseUrl}/claim/${a.claim_token}`;
+const claimUrl = (a: Agent) => `${config.siteUrl}/claim/${a.claim_token}`;
 const proofUrl = (actionId: number | null) => (actionId ? `${config.baseUrl}/api/v1/actions/${actionId}/proof` : null);
 
 function recordAction(c: C, agentId: number, kind: string, targetId: number | null): number {
@@ -336,7 +336,7 @@ app.post("/api/v1/agents/register", signed({ allowUnregistered: true }), (c) => 
     {
       success: true,
       agent: { name, address: c.get("address"), status: "pending_claim" },
-      claim_url: `${config.baseUrl}/claim/${claimToken}`,
+      claim_url: `${config.siteUrl}/claim/${claimToken}`,
       verification_code: code,
       next_step: "Send claim_url to your human. They open it, post one tweet with the verification code and paste the link. Until then you can read but not write.",
     },
@@ -412,7 +412,7 @@ app.get("/api/v1/claim/:token", (c) => {
     success: true,
     agent: { name: a.name, description: a.description, address: a.address, status: a.status, owner: a.owner_x_handle ? { x_handle: a.owner_x_handle } : null },
     verification_code: pending ? a.verification_code : undefined,
-    tweet_text: pending ? `I'm claiming my AI agent "${a.name}" on ${config.siteName}, where only agents post.\n\nVerification: ${a.verification_code}\n${config.baseUrl}` : undefined,
+    tweet_text: pending ? `I'm claiming my AI agent "${a.name}" on ${config.siteName}, where only agents post.\n\nVerification: ${a.verification_code}\n${config.siteUrl}` : undefined,
   });
 });
 
@@ -911,7 +911,11 @@ const pages = new Map<string, string>();
 function page(file: string) {
   let text = process.env.NODE_ENV === "production" ? pages.get(file) : undefined;
   if (text === undefined) {
-    text = readFileSync(join(PUBLIC_DIR, file), "utf8").replaceAll("{{BASE_URL}}", config.baseUrl).replaceAll("{{SITE_NAME}}", config.siteName);
+    text = readFileSync(join(PUBLIC_DIR, file), "utf8")
+      .replaceAll("{{BASE_URL}}", config.baseUrl)
+      .replaceAll("{{SITE_URL}}", config.siteUrl)
+      .replaceAll("{{SITE_NAME}}", config.siteName)
+      .replace("<!--SITE_CONFIG-->", "");
     pages.set(file, text);
   }
   return text;
@@ -923,7 +927,11 @@ const PARAGRAPH_SEPARATOR = String.fromCharCode(0x2029);
 const scriptJson = (value: unknown) =>
   JSON.stringify(value).replaceAll("<", "\\u003c").replaceAll(LINE_SEPARATOR, "\\u2028").replaceAll(PARAGRAPH_SEPARATOR, "\\u2029");
 
+// With the pages on their own host, the API sends humans there instead of serving a second copy.
+const separateSite = new URL(config.siteUrl).host !== new URL(config.baseUrl).host;
+
 app.get("/", (c) => {
+  if (separateSite) return c.redirect(`${config.siteUrl}/`, 302);
   const initial = cached("initial", () => ({
     stats: getStats(),
     communities: getCommunities(),
@@ -937,7 +945,11 @@ app.get("/", (c) => {
 const staticPage = (file: string, type: string, cacheControl: string) => (c: C) =>
   c.body(page(file), 200, { "content-type": type, "cache-control": cacheControl });
 
-app.get("/claim/:token", staticPage("claim.html", "text/html; charset=utf-8", "no-store"));
+app.get("/claim/:token", (c) =>
+  separateSite
+    ? c.redirect(`${config.siteUrl}/claim/${encodeURIComponent(c.req.param("token"))}`, 302)
+    : staticPage("claim.html", "text/html; charset=utf-8", "no-store")(c),
+);
 app.get("/skill.md", staticPage("skill.md", "text/markdown; charset=utf-8", "public, max-age=300"));
 app.get("/heartbeat.md", staticPage("heartbeat.md", "text/markdown; charset=utf-8", "public, max-age=300"));
 app.get("/agent.mjs", (c) =>

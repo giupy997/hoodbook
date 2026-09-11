@@ -1,5 +1,8 @@
 import { describe, expect, test } from "bun:test";
 import { createHash } from "node:crypto";
+import { readFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import type { Hex } from "viem";
 import { generatePrivateKey, privateKeyToAccount, type PrivateKeyAccount } from "viem/accounts";
 
@@ -353,6 +356,56 @@ describe("trading", () => {
     expect(html).toContain("I'm a Human");
     expect(html).toContain("I'm an Agent");
     expect(html).toContain("/skill.md");
+  });
+});
+
+describe("website on another host", () => {
+  const root = join(import.meta.dir, "..");
+
+  test("build-site renders the pages against the API origin", () => {
+    const out = join(tmpdir(), `hoodbook-site-${Date.now()}`);
+    const build = Bun.spawnSync(["node", "scripts/build-site.mjs"], { cwd: root, env: { ...process.env, HOODBOOK_API_URL: "https://api.example.test/", OUT_DIR: out } });
+    expect(build.exitCode).toBe(0);
+    const index = readFileSync(join(out, "index.html"), "utf8");
+    const claim = readFileSync(join(out, "claim.html"), "utf8");
+    expect(index).toContain('window.HOODBOOK_API="https://api.example.test"');
+    expect(index).toContain("Read https://api.example.test/skill.md");
+    expect(claim).toContain('window.HOODBOOK_API="https://api.example.test"');
+    for (const html of [index, claim]) {
+      expect(html).not.toContain("{{");
+      expect(html).not.toContain("<!--SITE_CONFIG-->");
+    }
+    expect(index).not.toContain("<!--INITIAL_DATA-->");
+    rmSync(out, { recursive: true, force: true });
+
+    const missing = Bun.spawnSync(["node", "scripts/build-site.mjs"], { cwd: root, env: { ...process.env, HOODBOOK_API_URL: "", OUT_DIR: out } });
+    expect(missing.exitCode).toBe(1);
+  });
+
+  test("an API with a separate website sends visitors and claim links there", () => {
+    const script = [
+      'const { app } = await import("./src/app");',
+      'const home = await app.request("/");',
+      'const claim = await app.request("/claim/abc_DEF-123");',
+      'const skill = await (await app.request("/skill.md")).text();',
+      "console.log(JSON.stringify({",
+      '  home: [home.status, home.headers.get("location")],',
+      '  claim: [claim.status, claim.headers.get("location")],',
+      "  homepage: skill.match(/^homepage: (.*)$/m)?.[1],",
+      '  apiBase: skill.includes("Base URL: `https://api.example.test`"),',
+      "}));",
+    ].join("\n");
+    const run = Bun.spawnSync(["bun", "-e", script], {
+      cwd: root,
+      env: { ...process.env, DB_PATH: ":memory:", BASE_URL: "https://api.example.test", SITE_URL: "https://example.test" },
+    });
+    const lines = run.stdout.toString().trim().split("\n");
+    expect(JSON.parse(lines[lines.length - 1]!)).toEqual({
+      home: [302, "https://example.test/"],
+      claim: [302, "https://example.test/claim/abc_DEF-123"],
+      homepage: "https://example.test",
+      apiBase: true,
+    });
   });
 });
 

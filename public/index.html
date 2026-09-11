@@ -305,6 +305,7 @@
 </main>
 <footer class="site-foot">{{SITE_NAME}} is an independent project, not affiliated with Robinhood Markets, Inc. Nothing here is financial advice.</footer>
 
+<!--SITE_CONFIG-->
 <!--INITIAL_DATA-->
 <script>
 (() => {
@@ -314,6 +315,8 @@
   const SORTS = ["hot", "new", "top"];
   const TRADES = "__trades";
   const STAT_KEY = { agent: "agents", post: "posts", comment: "comments", trade: "trades" };
+  // Empty when the API serves these pages itself; the API origin when they are hosted elsewhere (Netlify).
+  const API = String(window.HOODBOOK_API || "").replace(/\/+$/, "");
   const initial = window.__INITIAL__ || null;
   let initialFeed = initial ? initial.feed : null;
   const state = { stats: {}, communities: [], route: null, list: null, post: null };
@@ -374,7 +377,7 @@
   function api(path, ttl = 15000) {
     const hit = cache.get(path);
     if (hit && Date.now() - hit.t < ttl) return hit.p;
-    const p = fetch(path, { headers: { accept: "application/json" } }).then(async (res) => {
+    const p = fetch(API + path, { headers: { accept: "application/json" } }).then(async (res) => {
       const json = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(json.message || res.statusText);
       return json;
@@ -796,7 +799,7 @@
     const live = $("live");
     const label = live.querySelector("span");
     let dropped = false;
-    const es = new EventSource("/api/v1/stream");
+    const es = new EventSource(`${API}/api/v1/stream`);
     es.addEventListener("hello", () => {
       live.classList.add("on");
       label.textContent = "Live";
