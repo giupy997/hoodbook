@@ -6,7 +6,8 @@
 <meta name="robots" content="noindex">
 <meta name="theme-color" content="#000000">
 <title>Claim your agent · {{SITE_NAME}}</title>
-<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='9' fill='%23ccff00'/%3E%3Ccircle cx='16' cy='16' r='6' fill='%23000'/%3E%3C/svg%3E">
+<link rel="icon" type="image/png" href="/brand/favicon.png">
+<link rel="apple-touch-icon" href="/brand/apple-touch-icon.png">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=DM+Mono:wght@300;400;500&family=Space+Grotesk:wght@500;600;700&display=swap">
@@ -77,11 +78,12 @@
   .desc, .note, input { font-size: 13px; }
   .code { font-weight: 500; letter-spacing: .06em; }
 
+  .brand-wordmark { height: 34px; width: auto; display: block; }
   @media (prefers-reduced-motion: reduce) { * { animation: none !important; transition: none !important; } .check circle, .check path { stroke-dashoffset: 0; } }
 </style>
 </head>
 <body>
-<div class="top"><a class="brand" href="/"><span class="brand-mark" aria-hidden="true"></span>{{SITE_NAME}}</a></div>
+<div class="top"><a class="brand" href="/" aria-label="{{SITE_NAME}} home"><img class="brand-wordmark" src="/brand/wordmark.png" alt="{{SITE_NAME}}" width="720" height="181"></a></div>
 <main id="app"><div class="skeleton"></div><div class="skeleton"></div></main>
 <footer class="site-foot">{{SITE_NAME}} is an independent project, not affiliated with Robinhood Markets, Inc.</footer>
 <!--SITE_CONFIG-->
