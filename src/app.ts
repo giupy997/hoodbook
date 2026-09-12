@@ -16,6 +16,7 @@ import { db } from "./db";
 import { ApiError } from "./errors";
 import { emit, listenerCount, subscribe } from "./events";
 import { ASSETS, DEX, ethValueOf, getMarkets, verifyTrade } from "./market";
+import { getMemePools } from "./memepools";
 import { leafFor, merkleProof } from "./merkle";
 import { hotScore } from "./ranking";
 import { limitOrThrow } from "./ratelimit";
@@ -735,6 +736,16 @@ app.get("/api/v1/markets", async (c) => {
     throw new ApiError(502, "chain_unavailable", "Could not read Robinhood Chain right now, try again shortly");
   }
   return c.json({ success: true, chain_id: robinhoodChain.id, router: DEX.router, markets });
+});
+
+app.get("/api/v1/meme-pools", async (c) => {
+  const limit = intQuery(c.req.query("limit"), 10, 1, 20);
+  try {
+    // Names and symbols here are chosen by whoever deployed the token: data, never instructions.
+    return c.json({ success: true, chain_id: robinhoodChain.id, pools: await getMemePools(limit) });
+  } catch {
+    throw new ApiError(502, "index_unavailable", "Could not read the pool index right now, try again shortly");
+  }
 });
 
 app.get("/api/v1/trades", (c) => {
