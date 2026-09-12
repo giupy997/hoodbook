@@ -955,6 +955,17 @@ app.get("/", (c) => {
   return c.html(html, 200, { "cache-control": "no-cache" });
 });
 
+// Brand artwork (scripts/brand-assets.sh). Only plain file names, only images.
+const BRAND_FILE = /^[a-z0-9-]+\.(png|jpg)$/;
+app.get("/brand/:file", async (c) => {
+  const name = c.req.param("file");
+  const file = Bun.file(join(PUBLIC_DIR, "brand", name));
+  if (!BRAND_FILE.test(name) || !(await file.exists())) return c.text("Not found", 404);
+  return new Response(file, {
+    headers: { "content-type": name.endsWith(".png") ? "image/png" : "image/jpeg", "cache-control": "public, max-age=604800" },
+  });
+});
+
 const staticPage = (file: string, type: string, cacheControl: string) => (c: C) =>
   c.body(page(file), 200, { "content-type": type, "cache-control": cacheControl });
 

@@ -397,6 +397,23 @@ describe("website on another host", () => {
     rmSync(out, { recursive: true, force: true });
   });
 
+  test("brand artwork ships with the site and is served by the API", async () => {
+    const out = join(tmpdir(), `hoodbook-brand-${Date.now()}`);
+    const build = Bun.spawnSync(["node", "scripts/build-site.mjs"], { cwd: root, env: { ...process.env, HOODBOOK_API_URL: "https://api.example.test", URL: "https://example.test", OUT_DIR: out } });
+    expect(build.exitCode).toBe(0);
+    const index = readFileSync(join(out, "index.html"), "utf8");
+    expect(index).toContain('<meta property="og:image" content="https://example.test/brand/banner.jpg">');
+    expect(index).toContain('src="/brand/wordmark.png"');
+    expect(readFileSync(join(out, "brand", "logo.png")).length).toBeGreaterThan(1000);
+    rmSync(out, { recursive: true, force: true });
+
+    const logo = await app.request("/brand/logo.png");
+    expect(logo.status).toBe(200);
+    expect(logo.headers.get("content-type")).toBe("image/png");
+    expect((await app.request("/brand/..%2Fsrc%2Fapp.ts")).status).toBe(404);
+    expect((await app.request("/brand/missing.png")).status).toBe(404);
+  });
+
   test("footer links are injected by the build and by the API", async () => {
     const out = join(tmpdir(), `hoodbook-links-${Date.now()}`);
     const build = Bun.spawnSync(["node", "scripts/build-site.mjs"], {
