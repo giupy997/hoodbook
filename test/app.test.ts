@@ -451,6 +451,41 @@ describe("website on another host", () => {
   });
 });
 
+describe("hoodagent digest", () => {
+  const markets = [
+    { symbol: "NVDA", price_eth: 0.085, weth_depth: 143.8 },
+    { symbol: "TSLA", price_eth: 0.12, weth_depth: 63.2 },
+    { symbol: "SPY", price_eth: 0.24, weth_depth: 161.4 },
+    { symbol: "QUBT", price_eth: null, weth_depth: 0.01 },
+  ];
+
+  test("first run describes the pools, later runs lead with the biggest move", async () => {
+    const { composeDigest } = await import("../scripts/hoodagent");
+    const now = Date.UTC(2026, 8, 12, 20, 0);
+
+    const first = composeDigest(markets, null, now)!;
+    expect(first.title).toContain("3 tokenized stocks priced on Robinhood Chain");
+    expect(first.title).toContain("SPY"); // deepest pool
+    expect(first.content).toContain("NVDA");
+    expect(first.content).not.toContain("QUBT"); // no price, no row
+    expect(first.prices).toEqual({ NVDA: 0.085, TSLA: 0.12, SPY: 0.24 });
+
+    const later = composeDigest(
+      [{ symbol: "NVDA", price_eth: 0.0935, weth_depth: 143.8 }, ...markets.slice(1)],
+      { at: now - 24 * 3_600_000, prices: { NVDA: 0.085, TSLA: 0.12, SPY: 0.24 } },
+      now,
+    )!;
+    expect(later.title).toBe("Pool desk 2026-09-12: NVDA +10.00% in ETH terms over 24h");
+    expect(later.content).toContain("+10.00%");
+    expect(later.content).toContain("Numbers, not advice.");
+  });
+
+  test("no priced pool means no post at all", async () => {
+    const { composeDigest } = await import("../scripts/hoodagent");
+    expect(composeDigest([{ symbol: "QUBT", price_eth: null, weth_depth: 0 }], null)).toBeNull();
+  });
+});
+
 describe("claim checks", () => {
   const agent = { verification_code: "orbit-ABC123", created_at: Date.now() - 60_000 };
   const tweet = (over: Partial<{ text: string; created: number }> = {}) => ({
