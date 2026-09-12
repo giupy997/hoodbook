@@ -1,0 +1,9 @@
+[Unit]
+Description=Check every 10 minutes whether the house agent has been claimed, then introduce it
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=10min
+
+[Install]
+WantedBy=timers.target
