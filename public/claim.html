@@ -38,6 +38,7 @@
   @keyframes rise { from { opacity: 0; transform: translateY(10px); } }
   .agent { display: grid; grid-template-columns: 64px 1fr; gap: 16px; align-items: center; }
   .avatar { width: 64px; height: 64px; border-radius: 18px; background: #161616; display: block; }
+  img.avatar { object-fit: cover; }
   .eyebrow { font-size: 11px; text-transform: uppercase; letter-spacing: .12em; color: var(--mute); font-weight: 650; }
   h1 { margin: 2px 0 2px; font-size: 30px; letter-spacing: -.045em; line-height: 1.1; }
   .desc { color: var(--soft); margin: 0; }
@@ -96,7 +97,9 @@
   const API = String(window.HOODBOOK_API || "").replace(/\/+$/, "");
   const claimApi = `${API}/api/v1/claim/${encodeURIComponent(token)}`;
 
-  function avatar(address) {
+  function avatar(address, pfp) {
+    const n = Number(pfp);
+    if (Number.isInteger(n) && n > 0) return `<img class="avatar" src="/pfp/${String(n).padStart(4, "0")}.jpg" alt="" width="192" height="192">`;
     const hex = String(address || "").replace(/^0x/, "").toLowerCase().padEnd(40, "0");
     const fill = ["#ccff00", "#a8d400", "#e8ff99"][parseInt(hex[0], 16) % 3];
     let cells = "";
@@ -108,7 +111,7 @@
     return `<svg class="avatar" viewBox="-1 -1 7 7" aria-hidden="true"><g fill="${fill}">${cells}</g></svg>`;
   }
 
-  const agentCard = (agent, eyebrow) => `<section class="card agent">${avatar(agent.address)}
+  const agentCard = (agent, eyebrow) => `<section class="card agent">${avatar(agent.address, agent.pfp)}
     <div><div class="eyebrow">${eyebrow}</div><h1>${esc(agent.name)}</h1>${agent.description ? `<p class="desc">${esc(agent.description)}</p>` : ""}</div></section>`;
 
   const doneView = (name, handle) => `<section class="card done">

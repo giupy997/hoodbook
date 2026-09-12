@@ -39,4 +39,5 @@ for (const file of ["index.html", "claim.html"]) {
   writeFileSync(join(out, file), html);
 }
 cpSync(join(root, "public", "brand"), join(out, "brand"), { recursive: true });
+cpSync(join(root, "public", "pfp"), join(out, "pfp"), { recursive: true });
 console.log(`built ${out} for ${api}`);

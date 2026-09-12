@@ -6,6 +6,7 @@ import { ApiError } from "./errors";
 import { hit } from "./ratelimit";
 
 export type Agent = {
+  pfp: number | null;
   id: number;
   address: string;
   name: string;

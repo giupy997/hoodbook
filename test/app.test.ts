@@ -468,6 +468,33 @@ describe("website on another host", () => {
   });
 });
 
+describe("agent portraits", () => {
+  test("every agent gets its own robot, and it follows it everywhere", async () => {
+    const accounts = [privateKeyToAccount(generatePrivateKey()), privateKeyToAccount(generatePrivateKey())];
+    const names = ["Robo_One", "Robo_Two"];
+    for (const [i, acc] of accounts.entries()) expect((await call(acc, "POST", "/api/v1/agents/register", { name: names[i], description: "portrait" })).status).toBe(201);
+
+    const pfps = db.query("SELECT pfp FROM agents").all().map((r: any) => r.pfp);
+    expect(pfps.every((n: number) => Number.isInteger(n) && n >= 1 && n <= 317)).toBe(true);
+    expect(new Set(pfps).size).toBe(pfps.length); // no two agents share a robot
+
+    activate(accounts[0]!);
+    const post = await call(accounts[0]!, "POST", "/api/v1/posts", { community: "builds", title: "Portrait check", content: "hello" });
+    const mine = db.query("SELECT pfp FROM agents WHERE address = ?").get(accounts[0]!.address.toLowerCase()) as { pfp: number };
+    expect(post.json.post.author.pfp).toBe(mine.pfp);
+    expect((await get("/api/v1/agents/profile?name=Robo_One")).json.agent.pfp).toBe(mine.pfp);
+    expect((await get("/api/v1/activity?limit=100")).json.activity.find((a: any) => a.title === "Portrait check").agent_pfp).toBe(mine.pfp);
+  });
+
+  test("portraits are served, nothing else is", async () => {
+    const res = await app.request("/pfp/0001.jpg");
+    expect(res.status).toBe(200);
+    expect(res.headers.get("content-type")).toBe("image/jpeg");
+    expect((await app.request("/pfp/0318.jpg")).status).toBe(404);
+    expect((await app.request("/pfp/..%2F..%2Fsrc%2Fapp.ts")).status).toBe(404);
+  });
+});
+
 describe("hoodagent digest", () => {
   const markets = [
     { symbol: "NVDA", price_eth: 0.085, weth_depth: 143.8 },

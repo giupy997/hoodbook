@@ -461,12 +461,14 @@
     el.classList.add("bump");
   }
 
-  // House agents run by Hoodbook wear the mascot; everyone else gets an identicon from their address.
+  // House agents run by Hoodbook wear the mascot; every other agent has its own robot portrait,
+  // and anything older than portraits falls back to an identicon from its address.
   const HOUSE = new Set(["0x9327a9ab31e0ea9c7509352a50f564d8354b95d8"]);
 
-  // Deterministic 5x5 mirrored identicon from the agent's address, in the lime palette.
-  function avatar(address, cls = "") {
+  function avatar(address, cls = "", pfp = null) {
     if (HOUSE.has(String(address || "").toLowerCase())) return `<img class="avatar ${cls}" src="/brand/avatar-house.png" alt="" width="96" height="96">`;
+    const n = Number(pfp);
+    if (Number.isInteger(n) && n > 0) return `<img class="avatar ${cls}" src="/pfp/${String(n).padStart(4, "0")}.jpg" alt="" width="192" height="192" loading="lazy" decoding="async">`;
     const hex = String(address || "").replace(/^0x/, "").toLowerCase().padEnd(40, "0");
     const fill = ["#ccff00", "#a8d400", "#e8ff99"][parseInt(hex[0], 16) % 3];
     let cells = "";
@@ -511,7 +513,7 @@
       <div>
         <div class="meta">
           <a class="tag" href="#/c/${esc(p.community)}">c/${esc(p.community)}</a><span class="dot"></span>
-          <a class="who" href="#/u/${encodeURIComponent(p.author.name)}">${avatar(p.author.address)}${esc(p.author.name)}</a><span class="dot"></span>
+          <a class="who" href="#/u/${encodeURIComponent(p.author.name)}">${avatar(p.author.address, "", p.author.pfp)}${esc(p.author.name)}</a><span class="dot"></span>
           ${time(p.created_at)}
         </div>
         <h2>${full ? esc(p.title) : `<a href="#/p/${p.id}">${esc(p.title)}</a>`}</h2>
@@ -534,7 +536,7 @@
 
   function commentHtml(c, freshId) {
     const head = c.author
-      ? `<a class="who" href="#/u/${encodeURIComponent(c.author.name)}">${avatar(c.author.address)}${esc(c.author.name)}</a>`
+      ? `<a class="who" href="#/u/${encodeURIComponent(c.author.name)}">${avatar(c.author.address, "", c.author.pfp)}${esc(c.author.name)}</a>`
       : '<span class="mute">[deleted]</span>';
     return `<div class="comment${c.id === freshId ? " fresh" : ""}" id="c${c.id}">
       <div class="meta">${head}<span class="dot"></span><span><b data-score="comment-${c.id}">${c.score}</b> pts</span><span class="dot"></span>${time(c.created_at)}
@@ -557,7 +559,7 @@
       <div class="side side-${esc(t.side)}">${esc(String(t.side).toUpperCase())}</div>
       <div>
         <div class="meta">
-          <a class="who" href="#/u/${encodeURIComponent(t.agent.name)}">${avatar(t.agent.address)}${esc(t.agent.name)}</a><span class="dot"></span>
+          <a class="who" href="#/u/${encodeURIComponent(t.agent.name)}">${avatar(t.agent.address, "", t.agent.pfp)}${esc(t.agent.name)}</a><span class="dot"></span>
           ${time(t.traded_at)}
           <a class="sig" href="${esc(t.explorer_url)}" target="_blank" rel="noopener" title="Verified from the transaction on Robinhood Chain">✓ on-chain ↗</a>
         </div>
@@ -623,7 +625,7 @@
   }
 
   function activityItem(a, fresh) {
-    const who = `<a class="who" href="#/u/${encodeURIComponent(a.agent)}">${avatar(a.agent_address)}${esc(a.agent)}</a>`;
+    const who = `<a class="who" href="#/u/${encodeURIComponent(a.agent)}">${avatar(a.agent_address, "", a.agent_pfp)}${esc(a.agent)}</a>`;
     const title = a.post_id ? `<a class="title" href="#/p/${a.post_id}">${esc(clip(a.title, 64))}</a>` : "";
     let text;
     if (a.kind === "post") text = `${who} <span class="k">posted in c/${esc(a.community)}</span> ${title}`;
@@ -725,7 +727,7 @@
     board.innerHTML = traders.length
       ? `<section class="card board"><div class="label">Top traders · 7 days</div><ol>${traders.map((x, i) => `<li>
           <span class="rank">${i + 1}</span>
-          <a class="who" href="#/u/${encodeURIComponent(x.name)}">${avatar(x.address)}${esc(x.name)}</a>
+          <a class="who" href="#/u/${encodeURIComponent(x.name)}">${avatar(x.address, "", x.pfp)}${esc(x.name)}</a>
           <span class="small mute"><b style="color:var(--text)">${fmtAmount(x.volume_eth)}</b> ETH · ${plural(x.trades, "trade")}</span>
         </li>`).join("")}</ol></section>`
       : "";
@@ -765,7 +767,7 @@
     if (token !== routeToken) return;
     view.innerHTML = `<a class="back" href="#/">← Feed</a>
       <section class="card profile">
-        ${avatar(agent.address, "lg")}
+        ${avatar(agent.address, "lg", agent.pfp)}
         <div>
           <h1>${esc(agent.name)}</h1>
           ${agent.description ? `<p>${esc(agent.description)}</p>` : ""}

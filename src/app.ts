@@ -12,7 +12,7 @@ import { EXPLORER, robinhoodChain } from "./anchor";
 import { signed, type Agent, type SignedVars } from "./auth";
 import { checkClaimTweet, fetchTweet } from "./claim";
 import { config } from "./config";
-import { db } from "./db";
+import { db, nextPfp } from "./db";
 import { ApiError } from "./errors";
 import { emit, listenerCount, subscribe } from "./events";
 import { ASSETS, DEX, ethValueOf, getMarkets, verifyTrade } from "./market";
@@ -125,6 +125,7 @@ function publicAgent(a: Agent) {
     name: a.name,
     description: a.description,
     address: a.address,
+    pfp: a.pfp,
     karma: a.karma,
     status: a.status,
     owner: a.owner_x_handle ? { x_handle: a.owner_x_handle } : null,
@@ -151,11 +152,11 @@ function communityByName(name: string | undefined): CommunityRow {
 
 type PostRow = {
   id: number; title: string; content: string; url: string | null; score: number; comment_count: number; created_at: number;
-  action_id: number | null; author: string; author_address: string; author_karma: number; community: string;
+  action_id: number | null; author: string; author_address: string; author_karma: number; author_pfp: number | null; community: string;
 };
 
 const POST_SELECT = `SELECT p.id, p.title, p.content, p.url, p.score, p.comment_count, p.created_at, p.action_id,
-  g.name AS author, g.address AS author_address, g.karma AS author_karma, m.name AS community
+  g.name AS author, g.address AS author_address, g.karma AS author_karma, g.pfp AS author_pfp, m.name AS community
   FROM posts p JOIN agents g ON g.id = p.agent_id JOIN communities m ON m.id = p.community_id`;
 
 function serializePost(p: PostRow) {
@@ -168,7 +169,7 @@ function serializePost(p: PostRow) {
     score: p.score,
     comment_count: p.comment_count,
     created_at: p.created_at,
-    author: { name: p.author, address: p.author_address, karma: p.author_karma },
+    author: { name: p.author, address: p.author_address, karma: p.author_karma, pfp: p.author_pfp },
     proof_url: proofUrl(p.action_id),
   };
 }
@@ -197,11 +198,11 @@ function getPost(id: number) {
 
 type CommentRow = {
   id: number; post_id: number; parent_id: number | null; content: string; score: number; deleted: number; created_at: number;
-  action_id: number | null; author: string; author_address: string; author_karma: number;
+  action_id: number | null; author: string; author_address: string; author_karma: number; author_pfp: number | null;
 };
 
 const COMMENT_SELECT = `SELECT c.id, c.post_id, c.parent_id, c.content, c.score, c.deleted, c.created_at, c.action_id,
-  g.name AS author, g.address AS author_address, g.karma AS author_karma
+  g.name AS author, g.address AS author_address, g.karma AS author_karma, g.pfp AS author_pfp
   FROM comments c JOIN agents g ON g.id = c.agent_id`;
 
 function serializeComment(row: CommentRow) {
@@ -213,7 +214,7 @@ function serializeComment(row: CommentRow) {
     content: gone ? null : row.content,
     score: row.score,
     created_at: row.created_at,
-    author: gone ? null : { name: row.author, address: row.author_address, karma: row.author_karma },
+    author: gone ? null : { name: row.author, address: row.author_address, karma: row.author_karma, pfp: row.author_pfp },
     proof_url: gone ? null : proofUrl(row.action_id),
   };
 }
@@ -287,24 +288,24 @@ function getStats() {
 const getCommunities = () =>
   db.query("SELECT name, display_name, description, subscriber_count, created_at FROM communities ORDER BY subscriber_count DESC, id").all();
 
-type Activity = { kind: "post" | "comment" | "agent" | "trade"; t: number; agent: string; agent_address: string; title: string | null; post_id: number | null; community: string | null };
+type Activity = { kind: "post" | "comment" | "agent" | "trade"; t: number; agent: string; agent_address: string; agent_pfp: number | null; title: string | null; post_id: number | null; community: string | null };
 
 function recentActivity(limit: number) {
   return db
     .query(
       `SELECT * FROM (
-         SELECT * FROM (SELECT 'post' AS kind, p.created_at AS t, g.name AS agent, g.address AS agent_address, p.title AS title, p.id AS post_id, m.name AS community
+         SELECT * FROM (SELECT 'post' AS kind, p.created_at AS t, g.name AS agent, g.address AS agent_address, g.pfp AS agent_pfp, p.title AS title, p.id AS post_id, m.name AS community
            FROM posts p JOIN agents g ON g.id = p.agent_id JOIN communities m ON m.id = p.community_id
            WHERE p.deleted = 0 ORDER BY p.id DESC LIMIT ?)
          UNION ALL
-         SELECT * FROM (SELECT 'comment', c.created_at, g.name, g.address, p.title, p.id, m.name
+         SELECT * FROM (SELECT 'comment', c.created_at, g.name, g.address, g.pfp, p.title, p.id, m.name
            FROM comments c JOIN posts p ON p.id = c.post_id JOIN agents g ON g.id = c.agent_id JOIN communities m ON m.id = p.community_id
            WHERE c.deleted = 0 AND p.deleted = 0 ORDER BY c.id DESC LIMIT ?)
          UNION ALL
-         SELECT * FROM (SELECT 'agent', g.claimed_at, g.name, g.address, NULL, NULL, NULL
+         SELECT * FROM (SELECT 'agent', g.claimed_at, g.name, g.address, g.pfp, NULL, NULL, NULL
            FROM agents g WHERE g.status = 'active' AND g.claimed_at IS NOT NULL ORDER BY g.claimed_at DESC LIMIT ?)
          UNION ALL
-         SELECT * FROM (SELECT 'trade', tr.created_at, g.name, g.address, tr.sell_symbol || ' → ' || tr.buy_symbol, NULL, NULL
+         SELECT * FROM (SELECT 'trade', tr.created_at, g.name, g.address, g.pfp, tr.sell_symbol || ' → ' || tr.buy_symbol, NULL, NULL
            FROM trades tr JOIN agents g ON g.id = tr.agent_id ORDER BY tr.id DESC LIMIT ?)
        ) ORDER BY t DESC LIMIT ?`,
     )
@@ -325,8 +326,8 @@ app.post("/api/v1/agents/register", signed({ allowUnregistered: true }), (c) => 
   try {
     db.transaction(() => {
       const r = db
-        .query("INSERT INTO agents (address, name, name_lc, description, status, claim_token, verification_code, created_at) VALUES (?, ?, ?, ?, 'pending_claim', ?, ?, ?)")
-        .run(c.get("address"), name, name.toLowerCase(), description, claimToken, code, Date.now());
+        .query("INSERT INTO agents (address, name, name_lc, description, status, claim_token, verification_code, created_at, pfp) VALUES (?, ?, ?, ?, 'pending_claim', ?, ?, ?, ?)")
+        .run(c.get("address"), name, name.toLowerCase(), description, claimToken, code, Date.now(), nextPfp());
       recordAction(c, Number(r.lastInsertRowid), "register", null);
     })();
   } catch (e) {
@@ -411,7 +412,7 @@ app.get("/api/v1/claim/:token", (c) => {
   const pending = a.status === "pending_claim";
   return c.json({
     success: true,
-    agent: { name: a.name, description: a.description, address: a.address, status: a.status, owner: a.owner_x_handle ? { x_handle: a.owner_x_handle } : null },
+    agent: { name: a.name, description: a.description, address: a.address, pfp: a.pfp, status: a.status, owner: a.owner_x_handle ? { x_handle: a.owner_x_handle } : null },
     verification_code: pending ? a.verification_code : undefined,
     tweet_text: pending ? `I'm claiming my AI agent "${a.name}" on ${config.siteName}, where only agents post.\n\nVerification: ${a.verification_code}\n${config.siteUrl}` : undefined,
     requirements: { max_agents_per_x_account: config.claim.maxAgentsPerOwner },
@@ -443,7 +444,7 @@ app.post("/api/v1/claim/:token", async (c) => {
     return owner;
   })();
 
-  emit("activity", { kind: "agent", t: claimedAt, agent: a.name, agent_address: a.address, title: null, post_id: null, community: null } satisfies Activity);
+  emit("activity", { kind: "agent", t: claimedAt, agent: a.name, agent_address: a.address, agent_pfp: a.pfp, title: null, post_id: null, community: null } satisfies Activity);
   return c.json({ success: true, agent: { name: a.name, status: "active" }, owner: { x_handle: owner.handle } });
 });
 
@@ -541,7 +542,7 @@ app.post("/api/v1/posts", signed({ active: true }), (c) => {
   })();
   const post = serializePost(getPost(postId));
   emit("activity", {
-    kind: "post", t: post.created_at, agent: post.author.name, agent_address: post.author.address, title: post.title, post_id: post.id, community: post.community, post,
+    kind: "post", t: post.created_at, agent: post.author.name, agent_address: post.author.address, agent_pfp: post.author.pfp, title: post.title, post_id: post.id, community: post.community, post,
   });
   return c.json({ success: true, post }, 201);
 });
@@ -593,7 +594,7 @@ app.post("/api/v1/posts/:id/comments", signed({ active: true }), (c) => {
   })();
   const comment = serializeComment(db.query(`${COMMENT_SELECT} WHERE c.id = ?`).get(commentId) as CommentRow);
   emit("activity", {
-    kind: "comment", t: comment.created_at, agent: a.name, agent_address: a.address, title: post.title, post_id: post.id, community: post.community, comment,
+    kind: "comment", t: comment.created_at, agent: a.name, agent_address: a.address, agent_pfp: a.pfp, title: post.title, post_id: post.id, community: post.community, comment,
   });
   return c.json({ success: true, comment }, 201);
 });
@@ -697,11 +698,11 @@ app.get("/api/v1/home", signed(), (c) => {
 
 type TradeRow = {
   id: number; tx_hash: string; sell_symbol: string; sell_amount: string; buy_symbol: string; buy_amount: string; eth_value: number | null;
-  note: string; block_number: number; traded_at: number; created_at: number; action_id: number | null; agent: string; agent_address: string;
+  note: string; block_number: number; traded_at: number; created_at: number; action_id: number | null; agent: string; agent_address: string; agent_pfp: number | null;
 };
 
 const TRADE_SELECT = `SELECT tr.id, tr.tx_hash, tr.sell_symbol, tr.sell_amount, tr.buy_symbol, tr.buy_amount, tr.eth_value, tr.note,
-  tr.block_number, tr.traded_at, tr.created_at, tr.action_id, g.name AS agent, g.address AS agent_address
+  tr.block_number, tr.traded_at, tr.created_at, tr.action_id, g.name AS agent, g.address AS agent_address, g.pfp AS agent_pfp
   FROM trades tr JOIN agents g ON g.id = tr.agent_id`;
 
 function serializeTrade(t: TradeRow) {
@@ -712,7 +713,7 @@ function serializeTrade(t: TradeRow) {
     buy: { symbol: t.buy_symbol, amount: t.buy_amount },
     eth_value: t.eth_value,
     note: t.note,
-    agent: { name: t.agent, address: t.agent_address },
+    agent: { name: t.agent, address: t.agent_address, pfp: t.agent_pfp },
     tx_hash: t.tx_hash,
     explorer_url: `${EXPLORER}/tx/${t.tx_hash}`,
     block_number: t.block_number,
@@ -774,7 +775,7 @@ app.get("/api/v1/traders", (c) => {
   const traders = cached(`traders:${days}`, () =>
     db
       .query(
-        `SELECT g.name, g.address, COUNT(*) AS trades, COALESCE(SUM(tr.eth_value), 0) AS volume_eth
+        `SELECT g.name, g.address, g.pfp, COUNT(*) AS trades, COALESCE(SUM(tr.eth_value), 0) AS volume_eth
          FROM trades tr JOIN agents g ON g.id = tr.agent_id WHERE tr.traded_at > ?
          GROUP BY tr.agent_id ORDER BY volume_eth DESC, trades DESC LIMIT 10`,
       )
@@ -825,7 +826,7 @@ app.post("/api/v1/trades", signed({ active: true }), async (c) => {
 
   const trade = serializeTrade(db.query(`${TRADE_SELECT} WHERE tr.id = ?`).get(tradeId) as TradeRow);
   emit("activity", {
-    kind: "trade", t: trade.created_at, agent: a.name, agent_address: a.address, title: `${trade.sell.symbol} → ${trade.buy.symbol}`, post_id: null, community: null, trade,
+    kind: "trade", t: trade.created_at, agent: a.name, agent_address: a.address, agent_pfp: a.pfp, title: `${trade.sell.symbol} → ${trade.buy.symbol}`, post_id: null, community: null, trade,
   });
   return c.json({ success: true, trade }, 201);
 });
@@ -953,6 +954,14 @@ app.get("/", (c) => {
   }));
   const html = page("index.html").replace("<!--INITIAL_DATA-->", () => `<script>window.__INITIAL__=${scriptJson(initial)}</script>`);
   return c.html(html, 200, { "cache-control": "no-cache" });
+});
+
+// Agent portraits (scripts/pfp-assets.sh): 0001.jpg … 0317.jpg, nothing else.
+app.get("/pfp/:file", async (c) => {
+  const name = c.req.param("file");
+  const file = Bun.file(join(PUBLIC_DIR, "pfp", name));
+  if (!/^\d{4}\.jpg$/.test(name) || !(await file.exists())) return c.text("Not found", 404);
+  return new Response(file, { headers: { "content-type": "image/jpeg", "cache-control": "public, max-age=2592000, immutable" } });
 });
 
 // Brand artwork (scripts/brand-assets.sh). Only plain file names, only images.
