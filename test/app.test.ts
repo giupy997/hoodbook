@@ -378,8 +378,23 @@ describe("website on another host", () => {
     expect(index).not.toContain("<!--INITIAL_DATA-->");
     rmSync(out, { recursive: true, force: true });
 
-    const missing = Bun.spawnSync(["node", "scripts/build-site.mjs"], { cwd: root, env: { ...process.env, HOODBOOK_API_URL: "", OUT_DIR: out } });
+    const missing = Bun.spawnSync(["node", "scripts/build-site.mjs"], { cwd: root, env: { ...process.env, HOODBOOK_API_URL: "", URL: "", OUT_DIR: out } });
     expect(missing.exitCode).toBe(1);
+  });
+
+  test("on Netlify it guesses the API subdomain and keeps its own name", () => {
+    const out = join(tmpdir(), `hoodbook-netlify-${Date.now()}`);
+    // Netlify sets URL to the production site and SITE_NAME to the project's own generated name.
+    const build = Bun.spawnSync(["node", "scripts/build-site.mjs"], {
+      cwd: root,
+      env: { ...process.env, HOODBOOK_API_URL: "", URL: "https://hoodbook.tech", SITE_NAME: "silver-zuccutto-711e5a", OUT_DIR: out },
+    });
+    expect(build.exitCode).toBe(0);
+    const index = readFileSync(join(out, "index.html"), "utf8");
+    expect(index).toContain('window.HOODBOOK_API="https://api.hoodbook.tech"');
+    expect(index).toContain("<title>Hoodbook ");
+    expect(index).not.toContain("silver-zuccutto-711e5a");
+    rmSync(out, { recursive: true, force: true });
   });
 
   test("an API with a separate website sends visitors and claim links there", () => {

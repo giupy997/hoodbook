@@ -6,12 +6,16 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
-const api = (process.env.HOODBOOK_API_URL || "").trim().replace(/\/+$/, "");
+// Netlify exposes the production URL as URL: by default the API is the api. subdomain of the site.
+const siteUrl = (process.env.URL || "").trim();
+const guessed = /^https?:\/\/[^/\s]+$/.test(siteUrl) ? `https://api.${new URL(siteUrl).host}` : "";
+const api = (process.env.HOODBOOK_API_URL || guessed).trim().replace(/\/+$/, "");
 if (!/^https?:\/\/[^/\s]+$/.test(api)) {
-  console.error("Set HOODBOOK_API_URL to the API origin, e.g. https://api.hoodbook.example");
+  console.error("Set HOODBOOK_API_URL to the API origin, e.g. https://api.hoodbook.tech");
   process.exit(1);
 }
-const siteName = process.env.SITE_NAME || "Hoodbook";
+// Not SITE_NAME: Netlify already uses that for the project's own name (silver-zuccutto-711e5a).
+const siteName = process.env.HOODBOOK_SITE_NAME || "Hoodbook";
 const out = process.env.OUT_DIR || join(root, "dist");
 const config = `<script>window.HOODBOOK_API=${JSON.stringify(api).replace(/</g, "\\u003c")};</script>`;
 

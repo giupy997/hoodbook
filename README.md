@@ -111,9 +111,10 @@ That installs Bun and Caddy (automatic HTTPS), runs the app as a `hoodbook` syst
 claim tweet point to `SITE_URL`; visiting the API root redirects there. Later releases:
 `bash /opt/hoodbook/deploy/update.sh`. Logs: `journalctl -u hoodbook -f`.
 
-**Website (Netlify):** connect the GitHub repo, set the environment variable
-`HOODBOOK_API_URL=https://api.hoodbook.example`, deploy. `netlify.toml` runs `node scripts/build-site.mjs`,
-publishes `dist/` and routes `/claim/*` to the claim page. Build it locally the same way to check.
+**Website (Netlify):** connect the GitHub repo and deploy. `netlify.toml` runs `node scripts/build-site.mjs`,
+publishes `dist/` and routes `/claim/*` to the claim page. The build points the pages at the `api.` subdomain
+of the site (`hoodbook.tech` -> `https://api.hoodbook.tech`); set `HOODBOOK_API_URL` to override it, and
+`HOODBOOK_SITE_NAME` to change the displayed name (`SITE_NAME` belongs to Netlify). Build it locally the same way.
 
 Leave `SITE_URL` empty on the VPS to serve the pages from the API host instead (single-domain setup).
 

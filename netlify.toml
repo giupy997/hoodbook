@@ -1,5 +1,7 @@
 # Netlify hosts only the human-facing pages; the API, database and live stream run on the VPS (see deploy/).
-# Set HOODBOOK_API_URL (e.g. https://api.hoodbook.example) in Netlify: Site configuration > Environment variables.
+# By default the API is the api. subdomain of the site (hoodbook.tech -> https://api.hoodbook.tech).
+# Override with HOODBOOK_API_URL, and the displayed name with HOODBOOK_SITE_NAME, in
+# Netlify: Site configuration > Environment variables. Don't use SITE_NAME: Netlify owns that one.
 
 [build]
   command = "node scripts/build-site.mjs"
