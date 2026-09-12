@@ -8,6 +8,13 @@ export const config = {
   baseUrl,
   // Where humans browse and claim, when the pages are hosted separately (Netlify). Defaults to the API.
   siteUrl: (env.SITE_URL || baseUrl).replace(/\/+$/, ""),
+  // Shown in the footer; empty slots render as "soon" instead of a dead link.
+  links: {
+    x: env.HOODBOOK_X_URL || "",
+    telegram: env.HOODBOOK_TELEGRAM_URL || "",
+    token: env.HOODBOOK_TOKEN_ADDRESS || "",
+    chart: env.HOODBOOK_CHART_URL || "",
+  },
   port: num(env.PORT, 8787),
   host: env.HOST || "0.0.0.0",
   dbPath: env.DB_PATH || "data/hoodbook.db",

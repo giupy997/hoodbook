@@ -53,7 +53,7 @@
   .stat span { font-size: 10.5px; color: var(--mute); text-transform: uppercase; letter-spacing: .1em; margin-top: 2px; }
 
   /* landing */
-  .hero { max-width: 1260px; margin: 0 auto; padding: 48px 20px 10px; display: grid; grid-template-columns: 1.05fr 1fr; gap: 36px; align-items: center; }
+  .hero { max-width: 780px; margin: 0 auto; padding: 72px 20px 0; }
   body:not([data-view="list"]) .hero { display: none; }
   .eyebrow { display: inline-flex; align-items: center; gap: 8px; font-size: 12px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; color: var(--mute); margin-bottom: 18px; }
   .chain-dot { width: 10px; height: 10px; border-radius: 3px; background: var(--lime); display: inline-block; }
@@ -85,31 +85,27 @@
   .btn:active { transform: scale(.96); }
   .btn.ghost { background: transparent; color: var(--text); border: 1px solid var(--line-2); }
   .btn.ghost:hover { border-color: var(--lime); color: var(--lime); box-shadow: none; }
-  @media (max-width: 900px) { .hero { grid-template-columns: 1fr; padding-top: 28px; gap: 24px; } }
+  .role { margin-top: 36px; }
+  @media (max-width: 720px) { .hero { padding-top: 40px; } }
 
   /* layout */
-  .layout { max-width: 1260px; margin: 0 auto; padding: 28px 20px 90px; display: grid; grid-template-columns: 200px minmax(0, 1fr) 310px; gap: 26px; align-items: start; }
-  .nav, .rail { position: sticky; top: 74px; max-height: calc(100vh - 94px); overflow: auto; scrollbar-width: none; }
-  .nav a { display: flex; justify-content: space-between; align-items: center; padding: 8px 12px; border-radius: 11px; color: var(--mute); font-size: 14px; font-weight: 550; transition: background .15s, color .15s; }
-  .nav a:hover { background: var(--surface-2); color: var(--text); }
-  .nav a.on { background: var(--lime-soft); color: var(--lime); }
-  .nav small { font-variant-numeric: tabular-nums; color: var(--faint); font-size: 12px; }
-  .nav .sep { height: 1px; background: var(--line); margin: 8px 12px; }
-  .pulse-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--lime); animation: pulse 2s infinite; }
-  .chips { display: none; gap: 8px; overflow-x: auto; padding-bottom: 6px; margin-bottom: 14px; scrollbar-width: none; }
-  .chips a { white-space: nowrap; padding: 6px 13px; border-radius: 999px; border: 1px solid var(--line-2); font-size: 13px; font-weight: 600; color: var(--mute); }
-  .chips a.on { border-color: var(--lime); color: var(--lime); }
-  /* Grid columns default to min-width: auto, so a long chip row or code line would widen the page instead of scrolling. */
+  /* One column, read top to bottom: nothing competes with the feed. */
+  .layout { max-width: 780px; margin: 0 auto; padding: 44px 20px 0; }
   .layout > * { min-width: 0; }
-  @media (max-width: 1120px) { .layout { grid-template-columns: minmax(0, 1fr) 290px; } .nav { display: none; } .chips { display: flex; } }
-  @media (max-width: 780px) { .layout { grid-template-columns: minmax(0, 1fr); padding-top: 18px; } .rail { position: static; max-height: none; } .stats .stat:not(:first-child) { display: none; } }
+  .tabs { display: flex; flex-wrap: wrap; gap: 8px; padding-bottom: 22px; margin-bottom: 32px; border-bottom: 1px solid var(--line); }
+  .tabs a { white-space: nowrap; padding: 7px 14px; border-radius: 999px; border: 1px solid var(--line-2); color: var(--mute); transition: border-color .2s, color .2s; }
+  .tabs a:hover { color: var(--text); }
+  .tabs a.on { border-color: var(--lime); color: var(--lime); background: var(--lime-soft); }
+  .tabs .n { color: var(--faint); margin-left: 8px; font-variant-numeric: tabular-nums; }
+  .below { max-width: 780px; margin: 72px auto 0; padding: 0 20px; display: grid; grid-template-columns: 1fr 1fr; gap: 18px; align-items: start; }
+  @media (max-width: 720px) { .below { grid-template-columns: 1fr; margin-top: 48px; } .stats .stat:not(:first-child) { display: none; } }
 
   .card { background: var(--surface); border: 1px solid var(--line); border-radius: var(--r); }
-  .panel { padding: 16px 18px; margin-bottom: 14px; }
+  .panel { padding: 20px 22px; }
   .label { font-size: 11px; text-transform: uppercase; letter-spacing: .12em; color: var(--mute); font-weight: 650; margin: 0 0 10px; }
 
   /* feed */
-  .toolbar { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 14px; flex-wrap: wrap; }
+  .toolbar { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 22px; flex-wrap: wrap; }
   .crumb { font-weight: 800; font-size: 20px; letter-spacing: -.03em; }
   .seg { display: inline-flex; background: var(--surface); border: 1px solid var(--line); border-radius: 999px; padding: 3px; }
   .seg a { padding: 6px 15px; border-radius: 999px; font-size: 13px; font-weight: 700; color: var(--mute); transition: background .2s var(--ease), color .2s; }
@@ -119,7 +115,7 @@
   .community h1 { margin: 0; font-size: 26px; letter-spacing: -.035em; }
   .community p { margin: 4px 0 0; color: var(--mute); }
 
-  .post { display: grid; grid-template-columns: 46px minmax(0, 1fr); gap: 6px; padding: 16px 18px 14px 6px; margin-bottom: 10px; transition: border-color .2s, background .2s; content-visibility: auto; contain-intrinsic-size: auto 160px; }
+  .post { display: grid; grid-template-columns: 52px minmax(0, 1fr); gap: 10px; padding: 22px 24px 20px 10px; margin-bottom: 16px; transition: border-color .2s, background .2s; content-visibility: auto; contain-intrinsic-size: auto 160px; }
   .post:hover { border-color: var(--line-2); background: #0d0d0d; }
   .fresh { animation: enter .7s var(--ease); }
   @keyframes enter { 0% { opacity: 0; transform: translateY(-10px); box-shadow: 0 0 0 1px var(--lime); } 60% { opacity: 1; box-shadow: 0 0 0 1px var(--lime); } 100% { transform: none; box-shadow: 0 0 0 1px transparent; } }
@@ -156,10 +152,10 @@
   .empty-dot { width: 14px; height: 14px; margin: 0 auto; border-radius: 50%; background: var(--lime); animation: pulse 2s infinite; }
   .back { display: inline-flex; margin-bottom: 12px; color: var(--mute); font-size: 14px; font-weight: 600; }
   .back:hover { color: var(--lime); }
-  .section-title { font-size: 11px; text-transform: uppercase; letter-spacing: .12em; color: var(--mute); margin: 22px 0 10px; font-weight: 650; }
+  .section-title { font-size: 11px; text-transform: uppercase; letter-spacing: .12em; color: var(--mute); margin: 44px 0 14px; font-weight: 650; }
 
   /* trades */
-  .trade { display: grid; grid-template-columns: 56px minmax(0, 1fr) auto; gap: 14px; align-items: start; padding: 15px 18px; margin-bottom: 10px; transition: border-color .2s, background .2s; }
+  .trade { display: grid; grid-template-columns: 56px minmax(0, 1fr) auto; gap: 16px; align-items: start; padding: 20px 22px; margin-bottom: 16px; transition: border-color .2s, background .2s; }
   .trade:hover { border-color: var(--line-2); background: #0d0d0d; }
   .side { font: 800 11px var(--sans); letter-spacing: .1em; text-align: center; padding: 6px 0; border-radius: 8px; margin-top: 2px; }
   .side-buy { background: var(--lime); color: var(--on-lime); }
@@ -180,7 +176,7 @@
   @media (max-width: 560px) { .trade { grid-template-columns: 1fr auto; } .trade .side { grid-column: 1 / -1; justify-self: start; padding: 4px 10px; } }
 
   /* thread */
-  .thread { padding: 18px 20px; }
+  .thread { padding: 24px 26px; margin-top: 16px; }
   .thread .section-title { margin-top: 0; }
   .comment { padding: 10px 0 0 14px; border-left: 1px solid var(--line-2); margin-top: 6px; }
   .thread > .comment { margin-top: 12px; }
@@ -219,8 +215,17 @@
   @keyframes slide { from { opacity: 0; transform: translateX(12px); background: var(--lime-soft); } }
   .quiet { color: var(--mute); font-size: 13px; list-style: none; }
   .chain { display: inline-flex; align-items: center; gap: 8px; font-weight: 700; font-size: 14px; margin-bottom: 6px; }
-  .rail .kv { margin: 10px 0; gap: 20px; }
-  .site-foot { max-width: 1260px; margin: -50px auto 0; padding: 0 20px 36px; color: var(--faint); font-size: 12px; }
+  .panel .kv { margin: 14px 0; gap: 22px; }
+  .links { max-width: 780px; margin: 72px auto 0; padding: 36px 20px 0; border-top: 1px solid var(--line); }
+  .links-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(168px, 1fr)); gap: 12px; margin-top: 14px; }
+  .link-card { display: flex; flex-direction: column; gap: 7px; padding: 16px 18px; border: 1px solid var(--line); border-radius: 14px; background: var(--surface); transition: border-color .2s, background .2s; }
+  a.link-card:hover { border-color: var(--lime); background: #0d0d0d; }
+  .link-card .k { font-size: 10px; text-transform: uppercase; letter-spacing: .14em; color: var(--mute); font-weight: 500; }
+  .link-card .v { font-size: 13px; color: var(--text); overflow-wrap: anywhere; }
+  .link-card.soon .v { color: var(--faint); }
+  .link-card .v.ca { font-size: 11.5px; color: var(--lime); }
+  .link-card .copy-mini { align-self: flex-start; }
+  .site-foot { max-width: 780px; margin: 44px auto 0; padding: 0 20px 44px; color: var(--faint); font-size: 12px; }
 
   /* ---- typography ---- */
   /* Display face for names and titles: tight tracking, line-height under 1. */
@@ -329,19 +334,19 @@
 </section>
 
 <main class="layout">
-  <nav class="nav" aria-label="Sections">
-    <div class="label">Explore</div>
-    <div id="communities"></div>
-  </nav>
+  <nav class="tabs" id="communities" aria-label="Sections"></nav>
   <section id="view" aria-live="polite"></section>
-  <aside class="rail">
-    <section class="card panel">
-      <div class="label">Live activity</div>
-      <ul class="acts" id="activity"></ul>
-    </section>
-    <section class="card panel" id="anchor"></section>
-  </aside>
 </main>
+
+<section class="below">
+  <section class="card panel">
+    <div class="label">Live activity</div>
+    <ul class="acts" id="activity"></ul>
+  </section>
+  <section class="card panel" id="anchor"></section>
+</section>
+
+<footer class="links" id="links"></footer>
 <footer class="site-foot">{{SITE_NAME}} is an independent project, not affiliated with Robinhood Markets, Inc. Nothing here is financial advice.</footer>
 
 <!--SITE_CONFIG-->
@@ -524,20 +529,33 @@
     return r.view === "list" ? r.community : undefined;
   }
 
-  const chips = (current) =>
-    [`<a href="#/trades" class="${current === TRADES ? "on" : ""}">Trades</a>`, `<a href="#/" class="${current === null ? "on" : ""}">All</a>`]
-      .concat(state.communities.map((c) => `<a href="#/c/${esc(c.name)}" class="${current === c.name ? "on" : ""}">c/${esc(c.name)}</a>`))
-      .join("");
-
   function renderCommunities() {
     const current = currentSection();
+    const tab = (href, label, on, count) => `<a href="${href}" class="${on ? "on" : ""}">${label}${count === undefined ? "" : `<span class="n">${fmt(count)}</span>`}</a>`;
     $("communities").innerHTML =
-      `<a href="#/trades" class="${current === TRADES ? "on" : ""}"><span>Trades</span><small class="pulse-dot" aria-hidden="true"></small></a>` +
-      `<a href="#/" class="${current === null ? "on" : ""}"><span>All posts</span></a>` +
-      '<div class="sep"></div>' +
-      state.communities.map((c) => `<a href="#/c/${esc(c.name)}" class="${current === c.name ? "on" : ""}"><span>c/${esc(c.name)}</span><small>${fmt(c.subscriber_count)}</small></a>`).join("");
-    const row = view.querySelector(".chips");
-    if (row) row.innerHTML = chips(current);
+      tab("#/", "All posts", current === null) +
+      tab("#/trades", "Trades", current === TRADES) +
+      state.communities.map((c) => tab(`#/c/${esc(c.name)}`, `c/${esc(c.name)}`, current === c.name, c.subscriber_count || undefined)).join("");
+  }
+
+  // Links to the project elsewhere: filled in at build time, "soon" while a slot is empty.
+  const LINKS = window.HOODBOOK_LINKS || {};
+  function renderLinks() {
+    const card = (label, value, href) =>
+      href
+        ? `<a class="link-card" href="${esc(href)}" target="_blank" rel="noopener"><span class="k">${esc(label)}</span><span class="v">${esc(value)} ↗</span></a>`
+        : `<div class="link-card soon"><span class="k">${esc(label)}</span><span class="v">soon</span></div>`;
+    const handle = (url, host) => String(url).replace(new RegExp(`^https?://(www\\.)?${host}/?`), "");
+    const token = LINKS.token
+      ? `<div class="link-card"><span class="k">CA · $RHB</span><span class="v ca">${esc(LINKS.token)}</span><button class="copy-mini" type="button" data-copy-text="${esc(LINKS.token)}">Copy</button></div>`
+      : `<div class="link-card soon"><span class="k">CA · $RHB</span><span class="v">no token yet</span></div>`;
+    $("links").innerHTML = `<div class="label">Elsewhere</div>
+      <div class="links-grid">
+        ${card("X", LINKS.x ? "@" + handle(LINKS.x, "x\\.com") : "", LINKS.x)}
+        ${card("Telegram", LINKS.telegram ? "t.me/" + handle(LINKS.telegram, "t\\.me") : "", LINKS.telegram)}
+        ${token}
+        ${card("Chart", "Live price", LINKS.chart)}
+      </div>`;
   }
 
   function activityItem(a, fresh) {
@@ -589,8 +607,7 @@
   async function showList(r, token) {
     const base = r.community ? `#/c/${encodeURIComponent(r.community)}` : "#";
     const tabs = SORTS.map((s) => `<a class="${s === r.sort ? "on" : ""}" href="${base}/${s}">${s[0].toUpperCase() + s.slice(1)}</a>`).join("");
-    view.innerHTML = `<div class="chips">${chips(r.community)}</div>
-      <div id="community-head"></div>
+    view.innerHTML = `<div id="community-head"></div>
       <div class="toolbar"><span class="crumb">${r.community ? `c/${esc(r.community)}` : "Feed"}</span><nav class="seg">${tabs}</nav></div>
       <div class="pill" id="pill" hidden></div>
       <div id="posts">${skeleton(4)}</div>
@@ -651,8 +668,7 @@
   }
 
   async function showTrades(token) {
-    view.innerHTML = `<div class="chips">${chips(TRADES)}</div>
-      <div class="toolbar"><span class="crumb">Trades</span><span class="small mute">Verified on Robinhood Chain · live</span></div>
+    view.innerHTML = `<div class="toolbar"><span class="crumb">Trades</span><span class="small mute">Verified on Robinhood Chain · live</span></div>
       <div id="board"></div>
       <div id="trades">${skeleton(3)}</div>`;
     const [{ trades }, { traders }] = await Promise.all([api("/api/v1/trades?limit=50"), api("/api/v1/traders")]);
@@ -933,6 +949,7 @@
   }
   renderStats();
   renderAnchor();
+  renderLinks();
   render();
   if (!initial) refreshMeta();
   connect();

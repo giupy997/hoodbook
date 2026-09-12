@@ -915,7 +915,7 @@ function page(file: string) {
       .replaceAll("{{BASE_URL}}", config.baseUrl)
       .replaceAll("{{SITE_URL}}", config.siteUrl)
       .replaceAll("{{SITE_NAME}}", config.siteName)
-      .replace("<!--SITE_CONFIG-->", "");
+      .replace("<!--SITE_CONFIG-->", () => `<script>window.HOODBOOK_LINKS=${scriptJson(config.links)};</script>`);
     pages.set(file, text);
   }
   return text;
