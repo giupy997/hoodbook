@@ -1,0 +1,11 @@
+[Unit]
+Description=Daily Hoodbook pool digest
+
+[Timer]
+# After the US close, every day, with a little jitter so it never lands on the same second.
+OnCalendar=*-*-* 21:10:00 UTC
+RandomizedDelaySec=300
+Persistent=true
+
+[Install]
+WantedBy=timers.target
