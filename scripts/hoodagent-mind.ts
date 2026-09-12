@@ -58,8 +58,23 @@ async function gather(): Promise<Context> {
   return { home, hot, fresh, markets, trades, mine, memes };
 }
 
+const HOUR = 3_600_000;
+
+/**
+ * The server lets a freshly claimed agent post once every 2 hours for its first day, then once every
+ * 30 minutes. Knowing that up front means the desk never pays Claude to write a post it cannot publish,
+ * and skips the call entirely when there is also nothing to reply to and nobody new to read.
+ */
+export function planWakeup(input: { now: number; claimedAt: number | null; lastPostAt: number | null; lastThinkAt: number | null; owedReplies: number; newPostsByOthers: number }) {
+  const interval = input.claimedAt && input.now - input.claimedAt < 24 * HOUR ? 2 * HOUR : HOUR / 2;
+  const postReadyAt = input.lastPostAt ? input.lastPostAt + interval : input.now;
+  const canPost = postReadyAt <= input.now;
+  const worthThinking = canPost || input.owedReplies > 0 || input.newPostsByOthers > 0;
+  return { canPost, postReadyAt, worthThinking };
+}
+
 /** Facts first, other agents' words clearly fenced off as data. */
-export function buildPrompt(ctx: Context, now = new Date()) {
+export function buildPrompt(ctx: Context, now = new Date(), postReadyAt: number | null = null) {
   const markets = (ctx.markets?.markets ?? [])
     .filter((m: any) => m.price_eth)
     .sort((a: any, b: any) => b.weth_depth - a.weth_depth)
@@ -107,18 +122,21 @@ export function buildPrompt(ctx: Context, now = new Date()) {
     ...(ctx.fresh?.posts ?? []).map(post),
     "</untrusted_content>",
     "",
+    postReadyAt && postReadyAt > now.getTime()
+      ? `Posting is not open to you until ${new Date(postReadyAt).toISOString().slice(11, 16)} UTC: do not choose post. Comment, upvote, or nothing.`
+      : "Posting is open to you right now.",
     "Choose exactly one move: post, comment, upvote, or nothing. Answer an unanswered reply before writing anything new. Fill only the field for the action you chose; leave the others null.",
   ].join("\n");
 }
 
-async function decide(ctx: Context): Promise<{ decision: Decision; usage: any }> {
+async function decide(ctx: Context, postReadyAt: number): Promise<{ decision: Decision; usage: any }> {
   const client = new Anthropic();
   const response = await client.messages.parse({
     model: MODEL,
     max_tokens: 4000,
     output_config: { effort: "low", format: zodOutputFormat(Decision) },
     system: [{ type: "text", text: PERSONA, cache_control: { type: "ephemeral" } }],
-    messages: [{ role: "user", content: buildPrompt(ctx) }],
+    messages: [{ role: "user", content: buildPrompt(ctx, new Date(), postReadyAt) }],
   });
   if (!response.parsed_output) throw new Error("the model returned no usable decision");
   return { decision: response.parsed_output, usage: response.usage };
@@ -168,11 +186,30 @@ async function run(dry: boolean) {
     return;
   }
   const ctx = await gather();
-  const { decision, usage } = await decide(ctx);
+  const now = Date.now();
+  const lastThinkAt = guard.state.last_think ?? null;
+  const plan = planWakeup({
+    now,
+    claimedAt: me.agent.claimed_at,
+    lastPostAt: ctx.mine?.recent_posts?.[0]?.created_at ?? null,
+    lastThinkAt,
+    owedReplies: (ctx.home?.activity_on_your_posts?.length ?? 0) + (ctx.home?.replies_to_your_comments?.length ?? 0),
+    newPostsByOthers: (ctx.fresh?.posts ?? []).filter((p: any) => p.author?.name !== me.agent.name && (!lastThinkAt || p.created_at > lastThinkAt)).length,
+  });
+  if (!plan.worthThinking) {
+    console.log(`nothing to act on: posting opens at ${new Date(plan.postReadyAt).toISOString().slice(11, 16)} UTC, no replies owed, nobody new. Skipped without calling the model.`);
+    return;
+  }
+  const { decision, usage } = await decide(ctx, plan.postReadyAt);
   console.log(`decision: ${decision.action} — ${decision.reasoning}`);
   console.log(`tokens: ${usage.input_tokens} in (${usage.cache_read_input_tokens ?? 0} cached), ${usage.output_tokens} out`);
   if (dry) {
     console.log(JSON.stringify(decision, null, 2));
+    return;
+  }
+  if (decision.action === "post" && !plan.canPost) {
+    console.log("the model chose post while posting is closed; not sending it");
+    guard.spend({ last_think: now, last_action: "nothing" });
     return;
   }
   try {
