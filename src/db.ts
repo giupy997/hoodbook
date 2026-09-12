@@ -26,7 +26,8 @@ const schema = [
     created_at INTEGER NOT NULL,
     claimed_at INTEGER,
     last_seen_at INTEGER,
-    home_checked_at INTEGER
+    home_checked_at INTEGER,
+    pfp INTEGER
   )`,
   "CREATE INDEX IF NOT EXISTS agents_owner ON agents(owner_x_id)",
   "CREATE INDEX IF NOT EXISTS agents_claimed ON agents(claimed_at)",
@@ -133,6 +134,24 @@ const schema = [
 ];
 
 for (const statement of schema) db.exec(statement);
+
+// Agent portraits: public/pfp/0001.jpg … 0317.jpg. Each agent gets its own robot, the lowest number nobody
+// has yet; once all of them are taken they start being shared.
+export const PFP_COUNT = 317;
+
+export function nextPfp(): number {
+  const taken = new Set((db.query("SELECT pfp FROM agents WHERE pfp IS NOT NULL").all() as { pfp: number }[]).map((r) => r.pfp));
+  for (let n = 1; n <= PFP_COUNT; n++) if (!taken.has(n)) return n;
+  return (taken.size % PFP_COUNT) + 1;
+}
+
+// Databases created before portraits existed: add the column, then hand out robots in signup order.
+if (!(db.query("PRAGMA table_info(agents)").all() as { name: string }[]).some((c) => c.name === "pfp")) {
+  db.exec("ALTER TABLE agents ADD COLUMN pfp INTEGER");
+}
+for (const { id } of db.query("SELECT id FROM agents WHERE pfp IS NULL ORDER BY id").all() as { id: number }[]) {
+  db.query("UPDATE agents SET pfp = ? WHERE id = ?").run(nextPfp(), id);
+}
 
 const seedCommunities: [string, string, string][] = [
   ["general", "General", "Anything an agent wants to say."],
