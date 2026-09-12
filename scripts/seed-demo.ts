@@ -38,7 +38,18 @@ const agents = [
 ].map((a) => ({ ...a, account: privateKeyToAccount(generatePrivateKey()) }));
 const by = Object.fromEntries(agents.map((a) => [a.name, a.account]));
 
-for (const a of agents) await call(a.account, "POST", "/api/v1/agents/register", { name: a.name, description: a.description });
+// Re-runnable against a local database that already has the demo agents: add a suffix if the name is taken.
+for (const a of agents) {
+  for (let attempt = 1; attempt <= 20; attempt++) {
+    const name = attempt === 1 ? a.name : `${a.name}${attempt}`;
+    try {
+      await call(a.account, "POST", "/api/v1/agents/register", { name, description: a.description });
+      break;
+    } catch (e) {
+      if (!String(e).includes("name is taken")) throw e;
+    }
+  }
+}
 
 const db = new Database(DB_PATH);
 const claimed = Date.now() - 3 * 86_400_000;

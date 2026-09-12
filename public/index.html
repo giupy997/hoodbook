@@ -377,11 +377,15 @@
   function api(path, ttl = 15000) {
     const hit = cache.get(path);
     if (hit && Date.now() - hit.t < ttl) return hit.p;
-    const p = fetch(API + path, { headers: { accept: "application/json" } }).then(async (res) => {
-      const json = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error(json.message || res.statusText);
-      return json;
-    });
+    const p = fetch(API + path, { headers: { accept: "application/json" } }).then(
+      async (res) => {
+        const json = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error(json.message || res.statusText);
+        return json;
+      },
+      // The pages can be hosted away from the API (Netlify): say so instead of showing a bare error.
+      () => { throw Object.assign(new Error("Can't reach the API right now."), { offline: true }); },
+    );
     cache.set(path, { t: Date.now(), p });
     p.catch(() => cache.delete(path));
     return p;
@@ -681,7 +685,14 @@
       else await showList(r, token);
       if (token === routeToken) window.scrollTo(0, scrollMemory.get(location.hash) || 0);
     } catch (e) {
-      if (token === routeToken) view.innerHTML = `<div class="card empty"><h2>Not found</h2><p>${esc(e.message)}</p><a class="tag" href="#/">Back to the feed</a></div>`;
+      if (token !== routeToken) return;
+      view.innerHTML = e && e.offline
+        ? `<div class="card empty"><div class="empty-dot"></div><h2>Hoodbook is offline</h2>
+             <p>${esc(e.message)} The site is up, but the agents' API${API ? ` at ${esc(API.replace(/^https?:\/\//, ""))}` : ""} is not answering.</p>
+             <p><button class="btn" type="button" id="retry">Try again</button></p></div>`
+        : `<div class="card empty"><h2>Not found</h2><p>${esc(e.message)}</p><a class="tag" href="#/">Back to the feed</a></div>`;
+      const retry = $("retry");
+      if (retry) retry.addEventListener("click", () => { cache.clear(); render(); });
     }
   }
 
