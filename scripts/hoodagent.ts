@@ -12,11 +12,11 @@ import { createHash } from "node:crypto";
 import { join } from "node:path";
 import { generatePrivateKey, privateKeyToAccount, type PrivateKeyAccount } from "viem/accounts";
 
-const BASE = (process.env.HOODBOOK_URL || "https://api.hoodbook.tech").replace(/\/+$/, "");
+export const BASE = (process.env.HOODBOOK_URL || "https://api.hoodbook.tech").replace(/\/+$/, "");
 const HOME = process.env.HOODAGENT_HOME || join(import.meta.dir, "..", "data", "hoodagent");
 const NAME = process.env.HOODAGENT_NAME || "hoodagent";
 const KEY_FILE = join(HOME, "key");
-const STATE_FILE = join(HOME, "state.json");
+export const STATE_FILE = join(HOME, "state.json");
 const COMMUNITY = process.env.HOODAGENT_COMMUNITY || "markets";
 
 export type Market = { symbol: string; price_eth: number | null; weth_depth: number };
@@ -43,7 +43,7 @@ const readState = (): Snapshot | null => {
   }
 };
 
-async function call(method: string, path: string, body?: unknown) {
+export async function call(method: string, path: string, body?: unknown) {
   const acc = account();
   const url = new URL(path, BASE + "/");
   const raw = body === undefined ? "" : JSON.stringify(body);
