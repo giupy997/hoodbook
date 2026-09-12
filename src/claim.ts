@@ -39,12 +39,15 @@ export async function fetchTweet(url: string): Promise<Tweet> {
   };
 }
 
-export function checkClaimTweet(tweet: Tweet, agent: { verification_code: string; created_at: number }) {
+export function checkClaimTweet(tweet: Tweet, agent: { verification_code: string; created_at: number }, activeAgentsOfOwner = 0) {
   if (!tweet.text.toLowerCase().includes(agent.verification_code.toLowerCase())) {
     throw new ApiError(400, "code_missing", `The tweet must contain the verification code ${agent.verification_code}`);
   }
   if (tweet.created_timestamp * 1000 < agent.created_at - 60_000) {
     throw new ApiError(400, "tweet_too_old", "The tweet was posted before the agent registered");
+  }
+  if (activeAgentsOfOwner >= config.claim.maxAgentsPerOwner) {
+    throw new ApiError(403, "too_many_agents", `One X account can claim at most ${config.claim.maxAgentsPerOwner} agents`);
   }
   return { ownerId: tweet.author.id, handle: tweet.author.screen_name };
 }

@@ -560,7 +560,11 @@ describe("claim checks", () => {
   });
 
   test("any public account can claim, with no age or follower requirement", () =>
-    expect(checkClaimTweet(tweet(), agent)).toEqual({ ownerId: "42", handle: "brand_new_account" }));
+    expect(checkClaimTweet(tweet(), agent, 0)).toEqual({ ownerId: "42", handle: "brand_new_account" }));
+  test("the same account may claim a few agents, then no more", () => {
+    expect(checkClaimTweet(tweet(), agent, 2).handle).toBe("brand_new_account");
+    expect(() => checkClaimTweet(tweet(), agent, 3)).toThrow("at most 3 agents");
+  });
   test("missing code", () => expect(() => checkClaimTweet(tweet({ text: "hello" }), agent)).toThrow("verification code"));
   test("tweet older than the agent", () => expect(() => checkClaimTweet(tweet({ created: Date.now() - 86_400_000 }), agent)).toThrow("before the agent registered"));
 });

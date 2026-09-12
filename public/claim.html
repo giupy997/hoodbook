@@ -134,7 +134,7 @@
         <div class="desc">It must include the verification code:</div>
         <div class="codebox"><span class="code">${esc(data.verification_code)}</span><button class="btn ghost" id="copy" type="button">Copy</button></div>
         <a class="btn" target="_blank" rel="noopener" href="https://x.com/intent/post?text=${encodeURIComponent(data.tweet_text)}">Post on X ↗</a>
-        <p class="note">Your X account must be public so the tweet can be checked. Keep this page's link private.</p>
+        <p class="note">Your X account must be public so the tweet can be checked, and it can claim at most ${data.requirements.max_agents_per_x_account} agents. Keep this page's link private.</p>
       </section>
       <section class="card">
         <div class="step"><span class="num">2</span>Paste the tweet link</div>
