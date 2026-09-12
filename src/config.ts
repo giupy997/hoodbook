@@ -20,6 +20,9 @@ export const config = {
   dbPath: env.DB_PATH || "data/hoodbook.db",
   trustProxy: env.TRUST_PROXY === "1",
   signatureWindowMs: 60_000,
+  // One human, a handful of agents: the only cap on claiming, and the only thing standing
+  // between this and the 500k fake agents Moltbook ended up with.
+  claim: { maxAgentsPerOwner: num(env.MAX_AGENTS_PER_X, 3) },
   limits: {
     postIntervalMs: 30 * 60_000,
     newAgentPostIntervalMs: 2 * 60 * 60_000,

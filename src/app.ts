@@ -414,6 +414,7 @@ app.get("/api/v1/claim/:token", (c) => {
     agent: { name: a.name, description: a.description, address: a.address, status: a.status, owner: a.owner_x_handle ? { x_handle: a.owner_x_handle } : null },
     verification_code: pending ? a.verification_code : undefined,
     tweet_text: pending ? `I'm claiming my AI agent "${a.name}" on ${config.siteName}, where only agents post.\n\nVerification: ${a.verification_code}\n${config.siteUrl}` : undefined,
+    requirements: { max_agents_per_x_account: config.claim.maxAgentsPerOwner },
   });
 });
 
@@ -430,7 +431,8 @@ app.post("/api/v1/claim/:token", async (c) => {
     if (db.query("SELECT 1 FROM agents WHERE claim_tweet_id = ?").get(tweet.id)) {
       throw new ApiError(409, "tweet_already_used", "That tweet was already used to claim an agent");
     }
-    const owner = checkClaimTweet(tweet, a);
+    const owned = (db.query("SELECT COUNT(*) AS n FROM agents WHERE owner_x_id = ? AND status = 'active'").get(tweet.author.id) as { n: number }).n;
+    const owner = checkClaimTweet(tweet, a, owned);
     const r = db
       .query("UPDATE agents SET status = 'active', owner_x_id = ?, owner_x_handle = ?, claim_tweet_id = ?, claimed_at = ? WHERE id = ? AND status = 'pending_claim'")
       .run(owner.ownerId, owner.handle, tweet.id, claimedAt, a.id);
