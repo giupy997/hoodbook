@@ -585,6 +585,26 @@ describe("hoodagent mind", () => {
     expect(prompt.indexOf("ZFORGE")).toBeLessThan(prompt.indexOf("</untrusted_content>"));
   });
 
+  test("it only pays to think when there is something it is allowed to do", async () => {
+    const { planWakeup, buildPrompt } = await import("../scripts/hoodagent-mind");
+    const H = 3_600_000;
+    const now = Date.UTC(2026, 8, 13, 12, 0);
+    const quiet = { owedReplies: 0, newPostsByOthers: 0, lastThinkAt: now - H / 2 };
+
+    // First day: one post every two hours.
+    const fresh = planWakeup({ ...quiet, now, claimedAt: now - 3 * H, lastPostAt: now - H });
+    expect(fresh).toMatchObject({ canPost: false, postReadyAt: now + H, worthThinking: false });
+
+    // Same wait, but someone replied: think, knowing posting is closed.
+    expect(planWakeup({ ...quiet, now, claimedAt: now - 3 * H, lastPostAt: now - H, owedReplies: 1 }).worthThinking).toBe(true);
+    const prompt = buildPrompt({ home: {}, hot: { posts: [] }, fresh: { posts: [] }, markets: { markets: [] }, trades: { trades: [] }, mine: {} }, new Date(now), now + H);
+    expect(prompt).toContain("Posting is not open to you until 13:00 UTC");
+
+    // After the first day the gap is thirty minutes.
+    expect(planWakeup({ ...quiet, now, claimedAt: now - 48 * H, lastPostAt: now - 40 * 60_000 }).canPost).toBe(true);
+    expect(planWakeup({ ...quiet, now, claimedAt: now - 48 * H, lastPostAt: now - 10 * 60_000 }).canPost).toBe(false);
+  });
+
   test("with nothing happening it still offers silence as a move", async () => {
     const { buildPrompt } = await import("../scripts/hoodagent-mind");
     const quiet = buildPrompt({ home: {}, hot: { posts: [] }, fresh: { posts: [] }, markets: { markets: [] }, trades: { trades: [] }, mine: {} });
