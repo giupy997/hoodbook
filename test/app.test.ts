@@ -486,6 +486,26 @@ describe("hoodagent digest", () => {
   });
 });
 
+describe("meme pools", () => {
+  const payload = {
+    data: [
+      { attributes: { name: "USDG / WETH 0.01%", address: "0xaaa", volume_usd: { h24: "355442846" }, reserve_in_usd: "29409396", base_token_price_usd: "1.0", price_change_percentage: { h24: "0.03" } } },
+      { attributes: { name: "NVDA / USDG", address: "0xbbb", volume_usd: { h24: "49687870" }, reserve_in_usd: "387722" } },
+      { attributes: { name: "ZFORGE / WETH", address: "0xccc", volume_usd: { h24: "26030049" }, reserve_in_usd: "234310", base_token_price_usd: "0.004", price_change_percentage: { h24: "-79.3" } }, relationships: { base_token: { data: { id: "robinhood_0xdead" } } } },
+      { attributes: { name: "TINY / WETH", address: "0xddd", volume_usd: { h24: "1200" }, reserve_in_usd: "50" } },
+      { attributes: { name: "DEAD / WETH", address: "0xeee", volume_usd: { h24: "0" }, reserve_in_usd: "10" } },
+    ],
+  };
+
+  test("keeps the launches, drops stablecoins, listed stocks and dead pools", async () => {
+    const { normalizeMemePools } = await import("../src/memepools");
+    const pools = normalizeMemePools(payload);
+    expect(pools.map((p) => p.symbol)).toEqual(["ZFORGE", "TINY"]);
+    expect(pools[0]).toMatchObject({ volume_usd_24h: 26030049, liquidity_usd: 234310, change_24h: -79.3, token: "0xdead" });
+    expect(pools[0]!.chart_url).toBe("https://www.geckoterminal.com/robinhood/pools/0xccc");
+  });
+});
+
 describe("hoodagent mind", () => {
   const context = {
     home: { activity_on_your_posts: [{ post_id: 7, author: "Lumen", content: "where did the depth number come from?" }], replies_to_your_comments: [] },
@@ -494,6 +514,7 @@ describe("hoodagent mind", () => {
     markets: { markets: [{ symbol: "SPY", price_eth: 0.24, weth_depth: 161.4 }, { symbol: "NVDA", price_eth: 0.085, weth_depth: 143.8 }, { symbol: "QUBT", price_eth: null, weth_depth: 0 }] },
     trades: { trades: [{ agent: { name: "Forge" }, side: "buy", sell: { amount: "0.01", symbol: "ETH" }, buy: { amount: "0.117", symbol: "NVDA" }, eth_value: 0.01 }] },
     mine: { recent_posts: [{ created_at: Date.UTC(2026, 8, 12, 21, 0), title: "Pool desk 2026-09-12" }] },
+    memes: { pools: [{ symbol: "ZFORGE", pair: "ZFORGE / WETH", volume_usd_24h: 26030049, liquidity_usd: 234310, change_24h: -79.3 }] },
   };
 
   test("the prompt fences other agents' text as data and carries the real numbers", async () => {
@@ -513,6 +534,11 @@ describe("hoodagent mind", () => {
     expect(prompt).toContain("Forge buy 0.01 ETH -> 0.117 NVDA");
     expect(prompt).toContain("Pool desk 2026-09-12");
     expect(prompt).toContain("where did the depth number come from?");
+
+    // The busiest launches are in the prompt, and inside the fence: their names are attacker-chosen.
+    expect(prompt).toContain("ZFORGE (ZFORGE / WETH): $26,030,049 traded, $234,310 liquidity, -79.3% in 24h");
+    expect(prompt.indexOf("ZFORGE")).toBeGreaterThan(prompt.indexOf("<untrusted_content>"));
+    expect(prompt.indexOf("ZFORGE")).toBeLessThan(prompt.indexOf("</untrusted_content>"));
   });
 
   test("with nothing happening it still offers silence as a move", async () => {
