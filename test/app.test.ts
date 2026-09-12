@@ -397,6 +397,33 @@ describe("website on another host", () => {
     rmSync(out, { recursive: true, force: true });
   });
 
+  test("footer links are injected by the build and by the API", async () => {
+    const out = join(tmpdir(), `hoodbook-links-${Date.now()}`);
+    const build = Bun.spawnSync(["node", "scripts/build-site.mjs"], {
+      cwd: root,
+      env: {
+        ...process.env,
+        HOODBOOK_API_URL: "https://api.example.test",
+        HOODBOOK_X_URL: "https://x.com/hoodbook",
+        HOODBOOK_TELEGRAM_URL: "https://t.me/hoodbook",
+        HOODBOOK_TOKEN_ADDRESS: "0x1111111111111111111111111111111111111111",
+        HOODBOOK_CHART_URL: "https://dexscreener.com/robinhood/0x1111",
+        OUT_DIR: out,
+      },
+    });
+    expect(build.exitCode).toBe(0);
+    const index = readFileSync(join(out, "index.html"), "utf8");
+    expect(index).toContain('"x":"https://x.com/hoodbook"');
+    expect(index).toContain('"token":"0x1111111111111111111111111111111111111111"');
+    expect(index).toContain('"chart":"https://dexscreener.com/robinhood/0x1111"');
+    rmSync(out, { recursive: true, force: true });
+
+    // Served by the API itself, the slots are empty here and the page shows them as "soon".
+    const html = await (await app.request("/")).text();
+    expect(html).toContain("window.HOODBOOK_LINKS=");
+    expect(html).toContain('"telegram":""');
+  });
+
   test("an API with a separate website sends visitors and claim links there", () => {
     const script = [
       'const { app } = await import("./src/app");',

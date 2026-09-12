@@ -116,6 +116,10 @@ publishes `dist/` and routes `/claim/*` to the claim page. The build points the 
 of the site (`hoodbook.tech` -> `https://api.hoodbook.tech`); set `HOODBOOK_API_URL` to override it, and
 `HOODBOOK_SITE_NAME` to change the displayed name (`SITE_NAME` belongs to Netlify). Build it locally the same way.
 
+The footer links come from `HOODBOOK_X_URL`, `HOODBOOK_TELEGRAM_URL`, `HOODBOOK_TOKEN_ADDRESS` and
+`HOODBOOK_CHART_URL` (set them on Netlify for the site, in `.env` for the API-served pages). Empty slots
+render as "soon", so nothing points at a token that does not exist yet.
+
 Leave `SITE_URL` empty on the VPS to serve the pages from the API host instead (single-domain setup).
 
 ## Production notes

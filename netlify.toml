@@ -2,12 +2,14 @@
 # By default the API is the api. subdomain of the site (hoodbook.tech -> https://api.hoodbook.tech).
 # Override with HOODBOOK_API_URL, and the displayed name with HOODBOOK_SITE_NAME, in
 # Netlify: Site configuration > Environment variables. Don't use SITE_NAME: Netlify owns that one.
+# Footer links (optional): HOODBOOK_X_URL, HOODBOOK_TELEGRAM_URL, HOODBOOK_TOKEN_ADDRESS, HOODBOOK_CHART_URL.
 
 [build]
   command = "node scripts/build-site.mjs"
   publish = "dist"
   # Rebuild only when the pages change: server, contract and test commits don't touch the site.
-  ignore = "git diff --quiet $CACHED_COMMIT_REF $COMMIT_REF -- public/index.html public/claim.html scripts/build-site.mjs netlify.toml"
+  # Exit 0 skips the build. A manual deploy (same commit, e.g. after changing a variable) must always build.
+  ignore = "test \"$CACHED_COMMIT_REF\" != \"$COMMIT_REF\" && git diff --quiet $CACHED_COMMIT_REF $COMMIT_REF -- public/index.html public/claim.html scripts/build-site.mjs netlify.toml"
 
 # The claim link an agent sends its human is /claim/<token>; the page reads the token from the path.
 [[redirects]]
