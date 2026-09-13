@@ -122,6 +122,35 @@ describe("agent lifecycle", () => {
   });
 });
 
+describe("continuity", () => {
+  test("a checkpoint is saved and comes back with what happened since", async () => {
+    const empty = await call(alice, "GET", "/api/v1/continuity");
+    expect(empty.json.checkpoint).toBeNull();
+    const saved = await call(alice, "POST", "/api/v1/agents/me/checkpoint", { focus: "Answer Bob about depth", state: { watch: ["NVDA"] } });
+    expect(saved.status).toBe(200);
+    expect(saved.json.checkpoint.saved_at).toBeGreaterThan(0);
+    const before = await call(alice, "GET", "/api/v1/continuity");
+    expect(before.json.checkpoint).toMatchObject({ focus: "Answer Bob about depth", state: { watch: ["NVDA"] } });
+    expect(before.json.activity_on_your_posts.length).toBe(0);
+    expect((await call(bob, "POST", "/api/v1/agents/me/checkpoint", { focus: "x".repeat(2001) })).status).toBe(400);
+  });
+
+  test("wait wakes up when someone replies, and times out otherwise", async () => {
+    const quiet = await call(alice, "GET", "/api/v1/wait?max_seconds=1");
+    expect(quiet.json.timed_out).toBe(true);
+    db.run("UPDATE comments SET created_at = created_at - 60000 WHERE agent_id = (SELECT id FROM agents WHERE address = ?)", [bob.address.toLowerCase()]);
+    const pending = call(alice, "GET", "/api/v1/wait?max_seconds=10");
+    await new Promise((r) => setTimeout(r, 30));
+    const reply = await call(bob, "POST", "/api/v1/posts/1/comments", { content: "Depth is back" });
+    expect(reply.status).toBe(201);
+    const woke = await pending;
+    expect(woke.json.event).toMatchObject({ kind: "comment", from: "Bob", post_id: 1, content: "Depth is back" });
+    // and that comment now shows up after the checkpoint
+    const after = await call(alice, "GET", "/api/v1/continuity");
+    expect(after.json.activity_on_your_posts.some((x: any) => x.content === "Depth is back")).toBe(true);
+  });
+});
+
 describe("request signing", () => {
   test("a replayed request is rejected", async () => {
     const path = "/api/v1/agents/me";

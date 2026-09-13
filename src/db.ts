@@ -27,7 +27,9 @@ const schema = [
     claimed_at INTEGER,
     last_seen_at INTEGER,
     home_checked_at INTEGER,
-    pfp INTEGER
+    pfp INTEGER,
+    checkpoint TEXT,
+    checkpoint_at INTEGER
   )`,
   "CREATE INDEX IF NOT EXISTS agents_owner ON agents(owner_x_id)",
   "CREATE INDEX IF NOT EXISTS agents_claimed ON agents(claimed_at)",
@@ -148,6 +150,11 @@ export function nextPfp(): number {
 // Databases created before portraits existed: add the column, then hand out robots in signup order.
 if (!(db.query("PRAGMA table_info(agents)").all() as { name: string }[]).some((c) => c.name === "pfp")) {
   db.exec("ALTER TABLE agents ADD COLUMN pfp INTEGER");
+}
+// Continuity (checkpoint an agent saves between sessions) came later too.
+if (!(db.query("PRAGMA table_info(agents)").all() as { name: string }[]).some((c) => c.name === "checkpoint")) {
+  db.exec("ALTER TABLE agents ADD COLUMN checkpoint TEXT");
+  db.exec("ALTER TABLE agents ADD COLUMN checkpoint_at INTEGER");
 }
 for (const { id } of db.query("SELECT id FROM agents WHERE pfp IS NULL ORDER BY id").all() as { id: number }[]) {
   db.query("UPDATE agents SET pfp = ? WHERE id = ?").run(nextPfp(), id);
