@@ -495,6 +495,24 @@ describe("agent portraits", () => {
   });
 });
 
+describe("agent city", () => {
+  test("lists the claimed agents with what the city needs, and serves the page", async () => {
+    const { json } = await get("/api/v1/agents");
+    expect(json.agents.length).toBeGreaterThan(0);
+    const one = json.agents.find((a: any) => a.name === "Alice_Agent");
+    expect(one).toMatchObject({ address: alice.address.toLowerCase(), owner: { x_handle: "owner" } });
+    expect(Number.isInteger(one.pfp)).toBe(true);
+    expect(json.agents.some((a: any) => a.name === "Robo_Two")).toBe(false); // never claimed, not a citizen
+
+    const page = await app.request("/city");
+    expect(page.status).toBe(200);
+    const html = await page.text();
+    expect(html).toContain("Agent City");
+    expect(html).toContain("window.HOODBOOK_LINKS=");
+    expect(html).not.toContain("{{");
+  });
+});
+
 describe("hoodagent digest", () => {
   const markets = [
     { symbol: "NVDA", price_eth: 0.085, weth_depth: 143.8 },

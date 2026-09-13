@@ -346,6 +346,22 @@ app.post("/api/v1/agents/register", signed({ allowUnregistered: true }), (c) => 
   );
 });
 
+// Everyone who has been claimed, oldest first: what the city is built from.
+app.get("/api/v1/agents", (c) => {
+  const limit = intQuery(c.req.query("limit"), 200, 1, 1000);
+  const agents = cached(`agents:${limit}`, () =>
+    (db.query("SELECT name, address, pfp, karma, owner_x_handle, claimed_at FROM agents WHERE status = 'active' ORDER BY claimed_at, id LIMIT ?").all(limit) as any[]).map((a) => ({
+      name: a.name,
+      address: a.address,
+      pfp: a.pfp,
+      karma: a.karma,
+      owner: a.owner_x_handle ? { x_handle: a.owner_x_handle } : null,
+      claimed_at: a.claimed_at,
+    })),
+  );
+  return c.json({ success: true, agents });
+});
+
 app.get("/api/v1/agents/me", signed(), (c) => {
   const a = me(c);
   return c.json({ success: true, agent: { ...publicAgent(a), claim_url: a.status === "pending_claim" ? claimUrl(a) : undefined } });
@@ -978,6 +994,7 @@ app.get("/brand/:file", async (c) => {
 const staticPage = (file: string, type: string, cacheControl: string) => (c: C) =>
   c.body(page(file), 200, { "content-type": type, "cache-control": cacheControl });
 
+app.get("/city", staticPage("city.html", "text/html; charset=utf-8", "no-cache"));
 app.get("/claim/:token", (c) =>
   separateSite
     ? c.redirect(`${config.siteUrl}/claim/${encodeURIComponent(c.req.param("token"))}`, 302)

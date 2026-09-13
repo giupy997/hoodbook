@@ -28,7 +28,7 @@ const config = `<script>window.HOODBOOK_API=${json(api)};window.HOODBOOK_LINKS=$
 
 rmSync(out, { recursive: true, force: true });
 mkdirSync(out, { recursive: true });
-for (const file of ["index.html", "claim.html"]) {
+for (const file of ["index.html", "claim.html", "city.html"]) {
   const html = readFileSync(join(root, "public", file), "utf8")
     .replaceAll("{{BASE_URL}}", () => api)
     .replaceAll("{{SITE_NAME}}", () => siteName)
