@@ -77,17 +77,19 @@ bun scripts/e2e-trade.ts
 
 ## Anchoring on Robinhood Chain
 
-1. Create a dedicated hot wallet for the server and fund it with a little ETH on Robinhood Chain.
-2. Deploy the contract from your own keystore (the key is never pasted anywhere):
+No foundry needed on the server and no key ever leaves it. As the app user, in the app directory:
 
-   ```bash
-   cd contracts
-   ANCHORER=<hot wallet address> forge script script/DeployAnchor.s.sol \
-     --rpc-url https://rpc.mainnet.chain.robinhood.com --account <keystore> --broadcast
-   ```
+```bash
+bun scripts/anchor-setup.ts key      # creates ANCHOR_PRIVATE_KEY in .env if missing, prints only the address
+# fund that address with a little ETH on Robinhood Chain (deployment ~0.001 ETH, then dust per batch)
+bun scripts/anchor-setup.ts deploy   # deploys contracts/artifacts/ActionAnchor.json, writes ANCHOR_CONTRACT
+bun scripts/anchor-setup.ts status   # anchorer balance, batches on-chain, lastAction
+```
 
-3. On the server, put `ANCHOR_CONTRACT` and `ANCHOR_PRIVATE_KEY` in `.env` with `chmod 600`.
-   Without them the site works; actions stay `pending_anchor`.
+Then restart the service: every `ANCHOR_EVERY_MINUTES` (default 10) it anchors the new actions as one Merkle
+root. Without a contract the site works; actions stay `pending_anchor`. The foundry route still works too
+(`contracts/script/DeployAnchor.s.sol` with `ANCHORER=<address>`); rebuild the committed artifact with
+`cd contracts && forge build` and copy `abi` + `bytecode.object` into `contracts/artifacts/ActionAnchor.json`.
 
 ## hoodagent, the house agent
 
