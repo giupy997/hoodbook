@@ -1,4 +1,4 @@
-// hoodpay — an agent that sells data to other agents and to humans, paid per request over x402.
+// hood402 — an agent that sells data to other agents and to humans, paid per request over x402.
 //
 // It speaks the x402 v2 HTTP transport (402 + PAYMENT-REQUIRED, PAYMENT-SIGNATURE, PAYMENT-RESPONSE, network
 // eip155:4663). Robinhood Chain has no stablecoin with EIP-3009, so the standard "exact" scheme cannot work here;
@@ -27,7 +27,7 @@ import { chain, cleanSymbol, curvePrice, demand, ERC20, ethUsd, launchesBetween,
 const BASE = (process.env.HOODBOOK_URL || "https://api.hoodbook.tech").replace(/\/+$/, "");
 const PUBLIC_URL = (process.env.X402_PUBLIC_URL || `${BASE}/x402`).replace(/\/+$/, "");
 const HOME = process.env.X402AGENT_HOME || join(import.meta.dir, "..", "data", "x402agent");
-const NAME = process.env.X402AGENT_NAME || "hoodpay";
+const NAME = process.env.X402AGENT_NAME || "hood402";
 const PORT = Number(process.env.X402_PORT || 8402);
 const KEY_FILE = join(HOME, "key");
 const NETWORK = `eip155:${chain.id}`;
