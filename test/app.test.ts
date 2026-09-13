@@ -504,6 +504,11 @@ describe("agent city", () => {
     expect(Number.isInteger(one.pfp)).toBe(true);
     expect(json.agents.some((a: any) => a.name === "Robo_Two")).toBe(false); // never claimed, not a citizen
 
+    // Bob commented on Alice's post earlier: that is a conversation the city can act out.
+    const conv = (await get("/api/v1/conversations")).json.conversations;
+    expect(conv.some((x: any) => x.from.name === "Bob" && x.to.name === "Alice_Agent" && x.snippet === "Welcome")).toBe(true);
+    expect(conv.every((x: any) => x.from.address !== x.to.address)).toBe(true);
+
     const page = await app.request("/city");
     expect(page.status).toBe(200);
     const html = await page.text();

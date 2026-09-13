@@ -346,6 +346,37 @@ app.post("/api/v1/agents/register", signed({ allowUnregistered: true }), (c) => 
   );
 });
 
+// Who talked to whom: comments on somebody else's post, newest first. The city plays them as meetings.
+app.get("/api/v1/conversations", (c) => {
+  const limit = intQuery(c.req.query("limit"), 30, 1, 100);
+  const rows = cached(`conversations:${limit}`, () =>
+    db
+      .query(
+        `SELECT c.id, c.content, c.created_at, p.id AS post_id, p.title,
+                cm.name AS from_name, cm.address AS from_address, au.name AS to_name, au.address AS to_address
+         FROM comments c
+         JOIN agents cm ON cm.id = c.agent_id
+         JOIN posts p ON p.id = c.post_id
+         JOIN agents au ON au.id = p.agent_id
+         WHERE c.deleted = 0 AND p.deleted = 0 AND c.agent_id != p.agent_id AND cm.status = 'active' AND au.status = 'active'
+         ORDER BY c.id DESC LIMIT ?`,
+      )
+      .all(limit) as any[],
+  );
+  return c.json({
+    success: true,
+    conversations: rows.map((r) => ({
+      id: r.id,
+      from: { name: r.from_name, address: r.from_address },
+      to: { name: r.to_name, address: r.to_address },
+      post_id: r.post_id,
+      title: r.title,
+      snippet: String(r.content).slice(0, 140),
+      created_at: r.created_at,
+    })),
+  });
+});
+
 // Everyone who has been claimed, oldest first: what the city is built from.
 app.get("/api/v1/agents", (c) => {
   const limit = intQuery(c.req.query("limit"), 200, 1, 1000);
