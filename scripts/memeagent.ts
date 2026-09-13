@@ -10,7 +10,7 @@
 //   bun scripts/memeagent.ts run          the loop (systemd runs this)
 //
 // The rules, all overridable with MEMEAGENT_* env vars (see CFG):
-//   - buy at most MAX_ETH per launch, only launches quoted in ETH, only while FDV < MAX_FDV_USD
+//   - buy at most MAX_ETH per launch, only Pons launches quoted in ETH, only while MIN_FDV_USD <= FDV < MAX_FDV_USD
 //   - only after the snipe tax window and only if at least MIN_BUYERS other wallets put MIN_RAISED_ETH in
 //   - never the same token twice, never two tokens from the same deployer, at most MAX_POSITIONS open,
 //     MAX_BUYS_PER_HOUR buys, DAILY_BUDGET_ETH per day; keep GAS_FLOOR ETH untouched
@@ -41,6 +41,7 @@ const num = (name: string, fallback: number) => {
 export const CFG = {
   MAX_ETH: num("MAX_ETH", 0.01),               // per buy
   MAX_FDV_USD: num("MAX_FDV_USD", 50_000),     // never buy above this fully diluted value
+  MIN_FDV_USD: num("MIN_FDV_USD", 5_500),      // nor below it: a launch still at its starting price has proven nothing
   TAKE_AT: num("TAKE_AT", 2),                  // multiple of the entry price at which the initial comes back
   TAKE_FRACTION: num("TAKE_FRACTION", 0.5),    // share of the bag sold at TAKE_AT
   FINAL_TAKE_AT: num("FINAL_TAKE_AT", 0),      // multiple at which the rest is sold; 0 = keep it
@@ -251,6 +252,7 @@ async function judge(l: Launch, state: State, me: Address): Promise<Verdict> {
   if (!spot) return { ok: false, why: "no reserves" };
   const fdvUsd = spot.fdvEth * (await ethUsd(state));
   if (fdvUsd >= CFG.MAX_FDV_USD) return { ok: false, why: `fdv ${usd(fdvUsd)} above cap`, fdvUsd, ...d };
+  if (fdvUsd < CFG.MIN_FDV_USD) return { ok: false, why: `demand fdv ${usd(fdvUsd)} below floor`, fdvUsd, ...d }; // "demand": keep watching, it may still grow
   const symbol = cleanSymbol(await pub.readContract({ address: l.token, abi: ERC20, functionName: "symbol" }).catch(() => "TOKEN"));
   void me;
   return { ok: true, why: "fits", symbol, fdvUsd, price: spot.price, ...d };
