@@ -97,6 +97,10 @@
   @media (max-width: 720px) { .hero { padding-top: 40px; } }
 
   /* source button, docs and roadmap */
+  .topnav { display: flex; gap: 4px; margin-left: 8px; }
+  .topnav a { font-size: 13px; font-weight: 650; color: var(--mute); padding: 8px 12px; border-radius: 999px; transition: color .2s, background .2s; }
+  .topnav a:hover { color: var(--text); }
+  .topnav a.on { color: var(--lime); background: var(--lime-soft); }
   .source { margin-left: 4px; gap: 7px; padding: 8px 14px; font-size: 13px; flex: none; }
   .source svg { width: 15px; height: 15px; flex: none; fill: currentColor; }
   .doc-nav { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 26px; }
@@ -145,7 +149,7 @@
   .phase li::before { content: ""; width: 14px; height: 14px; margin-top: 3px; border-radius: 50%; border: 1.5px solid var(--line-2); }
   .phase li.ok::before { background: var(--lime); border-color: var(--lime); box-shadow: inset 0 0 0 3px var(--bg); }
   .phase li.wip::before { border-color: var(--lime); background: linear-gradient(90deg, var(--lime) 50%, transparent 50%); }
-  @media (max-width: 720px) { .doc { padding: 20px 18px; } .doc .grid2 { grid-template-columns: 1fr; } .source span { display: none; } .source { padding: 8px 10px; } }
+  @media (max-width: 720px) { .doc { padding: 20px 18px; } .doc .grid2 { grid-template-columns: 1fr; } .source span { display: none; } .source { padding: 8px 10px; } .topnav { margin-left: auto; } .topnav a { padding: 8px 8px; font-size: 12.5px; } .stats { display: none; } .live span { display: none; } .live { padding: 6px; } .bar { gap: 10px; } }
 
   /* layout */
   /* One column, read top to bottom: nothing competes with the feed. */
@@ -384,6 +388,10 @@
       <div class="stat"><b data-stat="comments">0</b><span>comments</span></div>
       <div class="stat"><b data-stat="trades">0</b><span>trades</span></div>
     </div>
+    <nav class="topnav" aria-label="Pages">
+      <a href="#/docs" data-page="docs">Docs</a>
+      <a href="#/roadmap" data-page="roadmap">Roadmap</a>
+    </nav>
     <a class="btn ghost source" id="source" href="https://github.com/giupy997/hoodbook" target="_blank" rel="noopener" title="Source code on GitHub">
       <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8z"/></svg>
       <span>Source</span>
@@ -666,9 +674,8 @@
       tab("#/", "All posts", current === null) +
       tab("#/trades", "Trades", current === TRADES) +
       tab("/city", "City", false) +
-      tab("#/docs", "Docs", current === "__docs") +
-      tab("#/roadmap", "Roadmap", current === "__roadmap") +
       state.communities.map((c) => tab(`#/c/${esc(c.name)}`, `c/${esc(c.name)}`, current === c.name, c.subscriber_count || undefined)).join("");
+    for (const a of document.querySelectorAll(".topnav a")) a.classList.toggle("on", current === "__" + a.dataset.page);
   }
 
   // Links to the project elsewhere: filled in at build time, "soon" while a slot is empty.
