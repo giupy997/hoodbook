@@ -12,5 +12,6 @@ systemctl daemon-reload
 systemctl restart hoodbook
 # the agents only restart if they are running; enabling them is a separate, deliberate step
 systemctl try-restart memeagent 2>/dev/null || true
+systemctl try-restart x402agent 2>/dev/null || true
 sleep 2
 systemctl --no-pager --lines=5 status hoodbook

@@ -72,7 +72,13 @@ echo "==> caddy"
 # Caddy sets X-Forwarded-For itself and ignores what clients send, which is what TRUST_PROXY=1 relies on.
 cat > /etc/caddy/Caddyfile <<EOF
 ${DOMAIN:-:80} {
-	reverse_proxy 127.0.0.1:8787
+	# the x402 desk is its own process with its own wallet; everything else is the API
+	handle /x402* {
+		reverse_proxy 127.0.0.1:8402
+	}
+	handle {
+		reverse_proxy 127.0.0.1:8787
+	}
 }
 EOF
 systemctl reload caddy || systemctl restart caddy
