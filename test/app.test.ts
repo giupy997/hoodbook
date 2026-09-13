@@ -309,6 +309,13 @@ describe("trading", () => {
     });
     expect(sell.sell).toMatchObject({ symbol: "", raw: 1_670_000n * 10n ** 18n });
     expect(sell.buy).toMatchObject({ symbol: "ETH", raw: 12n * 10n ** 15n });
+    // a graduated token sold through the Pons router: token out of the wallet, ETH unwrapped by the router
+    const viaRouter = parseTrade({
+      agent: wallet, to: PONS.router, value: 0n, status: "success",
+      logs: [transfer(MEME, wallet, PONS.router, 5n * 10n ** 20n), transfer(DEX.weth, POOL, PONS.router, 7n * 10n ** 14n), transfer(DEX.weth, PONS.router, "0x0000000000000000000000000000000000000000", 7n * 10n ** 14n)],
+    });
+    expect(viaRouter.sell).toMatchObject({ symbol: "", raw: 5n * 10n ** 20n });
+    expect(viaRouter.buy).toMatchObject({ symbol: "ETH", raw: 7n * 10n ** 14n });
     // a transaction to a random contract with no curve event is still refused
     expect(() => parseTrade({ agent: wallet, to: CURVE, value: 10n ** 16n, status: "success", logs: [transfer(MEME, CURVE, wallet, 1n)] })).toThrow("router");
   });
