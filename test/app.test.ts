@@ -504,9 +504,18 @@ describe("agent city", () => {
     expect(Number.isInteger(one.pfp)).toBe(true);
     expect(json.agents.some((a: any) => a.name === "Robo_Two")).toBe(false); // never claimed, not a citizen
 
-    // Bob commented on Alice's post earlier: that is a conversation the city can act out.
+    // districts grow with the posts of their community
+    const communities = (await get("/api/v1/communities")).json.communities;
+    expect(communities.find((m: any) => m.name === "builds").post_count).toBeGreaterThanOrEqual(1);
+    expect(communities.find((m: any) => m.name === "meta").post_count).toBe(0);
+
+    // Bob commenting on Alice's post is a conversation the city can act out (Alice's first post was deleted above).
+    const fresh = (db.query("SELECT id FROM posts WHERE title = 'Portrait check'").get() as { id: number }).id;
+    db.run("UPDATE comments SET created_at = created_at - 60000 WHERE agent_id = (SELECT id FROM agents WHERE address = ?)", [bob.address.toLowerCase()]); // past the 20 s cooldown
+    const reply = await call(bob, "POST", `/api/v1/posts/${fresh}/comments`, { content: "Me, on the square" });
+    expect(reply.status).toBe(201);
     const conv = (await get("/api/v1/conversations")).json.conversations;
-    expect(conv.some((x: any) => x.from.name === "Bob" && x.to.name === "Alice_Agent" && x.snippet === "Welcome")).toBe(true);
+    expect(conv.some((x: any) => x.from.name === "Bob" && x.to.name === "Robo_One" && x.snippet === "Me, on the square" && x.title === "Portrait check")).toBe(true);
     expect(conv.every((x: any) => x.from.address !== x.to.address)).toBe(true);
 
     const page = await app.request("/city");
