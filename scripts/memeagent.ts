@@ -5,6 +5,7 @@
 //   bun scripts/memeagent.ts register     once: create the identity and print the claim link + address to fund
 //   bun scripts/memeagent.ts status       who am I, claimed?, balance, open positions
 //   bun scripts/memeagent.ts scan         one pass over the last launches, prints what it would buy, buys nothing
+//   bun scripts/memeagent.ts withdraw <address> [eth|all]   send ETH (default: everything but gas) and every bag it holds to the human
 //   bun scripts/memeagent.ts once         one real pass (buys if something fits)
 //   bun scripts/memeagent.ts run          the loop (systemd runs this)
 //
@@ -73,6 +74,7 @@ const CURVE = parseAbi([
 ]);
 const ERC20 = parseAbi([
   "function balanceOf(address) view returns (uint256)",
+  "function transfer(address to, uint256 amount) returns (bool)",
   "function symbol() view returns (string)",
   "function allowance(address owner, address spender) view returns (uint256)",
   "function approve(address spender, uint256 amount) returns (bool)",
@@ -392,6 +394,33 @@ const commands: Record<string, () => Promise<void>> = {
     await pass(state, acc, true);
     console.log(`scanned; ${pending.length} launches still watched`);
   },
+  // The human never needs the key: the wallet empties itself to any address on request.
+  async withdraw() {
+    const to = process.argv[3] as Address | undefined;
+    const what = process.argv[4] ?? "all";
+    if (!to || !/^0x[0-9a-fA-F]{40}$/.test(to)) throw new Error("usage: withdraw <address> [eth amount|all]");
+    const acc = account();
+    const state = readState();
+    const wallet = createWalletClient({ account: acc, chain, transport: http(RPC) });
+    // every bag first, so the ETH left covers their gas
+    for (const p of state.positions) {
+      const held = await pub.readContract({ address: p.token, abi: ERC20, functionName: "balanceOf", args: [acc.address] }).catch(() => 0n);
+      if (held === 0n) continue;
+      const hash = await wallet.writeContract({ address: p.token, abi: ERC20, functionName: "transfer", args: [to, held] });
+      await pub.waitForTransactionReceipt({ hash, timeout: 120_000 });
+      p.closed = true;
+      console.log(`sent ${p.symbol} (${formatEther(held)} tokens) -> ${hash}`);
+    }
+    writeState(state);
+    const balance = await pub.getBalance({ address: acc.address });
+    const gasPrice = await pub.getGasPrice();
+    const fee = gasPrice * 21_000n * 2n;
+    const amount = what === "all" ? balance - fee : parseEther(what);
+    if (amount <= 0n || amount + fee > balance) throw new Error(`cannot send ${what}: balance ${formatEther(balance)} ETH`);
+    const hash = await wallet.sendTransaction({ to, value: amount });
+    await pub.waitForTransactionReceipt({ hash, timeout: 120_000 });
+    console.log(`sent ${formatEther(amount)} ETH to ${to} -> ${hash}`);
+  },
   async once() {
     const acc = account();
     const state = readState();
@@ -417,7 +446,7 @@ if (import.meta.main) {
   const cmd = process.argv[2] ?? "status";
   const run = commands[cmd];
   if (!run) {
-    console.error(`unknown command "${cmd}". Use: register | status | scan | once | run`);
+    console.error(`unknown command "${cmd}". Use: register | status | scan | once | run | withdraw <address> [eth|all]`);
     process.exit(2);
   }
   run().catch((e) => {
