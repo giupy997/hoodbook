@@ -16,7 +16,7 @@
 //     MAX_BUYS_PER_HOUR buys, DAILY_BUDGET_ETH per day; keep GAS_FLOOR ETH untouched
 //   - at TAKE_AT x the entry price sell TAKE_FRACTION of the bag (the initial comes back), keep the rest;
 //     FINAL_TAKE_AT (0 = never) sells the rest
-//   - at STOP_LOSS x the entry price (default 0.5, i.e. -50%) sell everything
+//   - at STOP_LOSS x the entry price (default 0.5, i.e. -50%) sell everything; after MAX_HOLD_MIN minutes too
 //   - once a curve graduates to Uniswap v4 it keeps watching the pool: on every volume spike (the last
 //     SPIKE_WINDOW_MIN minutes trade SPIKE_MULT times the average of the SPIKE_BASE_MIN before) it sells
 //     SPIKE_FRACTION of what is left, through the Pons router; the stop loss still applies there
@@ -55,6 +55,7 @@ export const CFG = {
   GAS_FLOOR_ETH: num("GAS_FLOOR_ETH", 0.002),
   SLIPPAGE_BPS: num("SLIPPAGE_BPS", 300),
   STOP_LOSS: num("STOP_LOSS", 0.5),            // multiple of the entry price below which everything is sold
+  MAX_HOLD_MIN: num("MAX_HOLD_MIN", 15),       // after this long the whole bag is sold, whatever the price
   SPIKE_FRACTION: num("SPIKE_FRACTION", 0.2),  // share of the remaining bag sold on each volume spike after graduation
   SPIKE_MULT: num("SPIKE_MULT", 3),            // window volume must be this many times the baseline
   SPIKE_WINDOW_MIN: num("SPIKE_WINDOW_MIN", 2),
@@ -324,6 +325,7 @@ async function manage(state: State, acc: PrivateKeyAccount) {
       if (held === 0n) { p.closed = true; writeState(state); continue; }
       let amount = 0n, label = "";
       if (multiple <= CFG.STOP_LOSS) { amount = held; label = "stop loss"; }
+      else if (Date.now() - p.boughtAt > CFG.MAX_HOLD_MIN * 60_000) { amount = held; label = "time up"; }
       else if (!p.tookInitial && multiple >= CFG.TAKE_AT) { amount = (held * BigInt(Math.round(CFG.TAKE_FRACTION * 10_000))) / 10_000n; label = "initial back"; }
       else if (p.tookInitial && CFG.FINAL_TAKE_AT > 0 && multiple >= CFG.FINAL_TAKE_AT) { amount = held; label = "rest sold"; }
       if (amount === 0n) continue;
@@ -348,7 +350,7 @@ async function manage(state: State, acc: PrivateKeyAccount) {
       await share(hash, `${p.symbol}: ${label} at ${multiple.toFixed(2)}x, ${eth(ethOut)} ETH out of ${eth(p.ethIn)} in. Rule, not advice.`);
       await post(`${p.symbol}: ${label} at ${multiple.toFixed(1)}x`, [
         `bought    ${eth(p.ethIn)} ETH at ${usd(p.fdvUsd)} FDV`,
-        `sold      ${label === "initial back" ? Math.round(CFG.TAKE_FRACTION * 100) + "% of the bag" : "everything"} for ${eth(ethOut)} ETH`,
+        `sold      ${label === "initial back" ? Math.round(CFG.TAKE_FRACTION * 100) + "% of the bag" : "everything"} for ${eth(ethOut)} ETH${label === "time up" ? ` after ${CFG.MAX_HOLD_MIN} min` : ""}`,
         `now       ${multiple.toFixed(2)}x the entry, ${usd(spot.fdvEth * (await ethUsd(state)))} FDV`,
         `tx        ${EXPLORER}/tx/${hash}`,
         ``,
@@ -394,6 +396,7 @@ async function managePool(p: Position, state: State, acc: PrivateKeyAccount, wal
   const spike = inWindow >= CFG.SPIKE_MIN_ETH && inWindow >= CFG.SPIKE_MULT * baseline && Date.now() - pool.lastSpikeAt > CFG.SPIKE_COOLDOWN_MIN * 60_000;
   let amount = 0n, label = "";
   if (multiple <= CFG.STOP_LOSS) { amount = held; label = "stop loss"; }
+  else if (Date.now() - p.boughtAt > CFG.MAX_HOLD_MIN * 60_000) { amount = held; label = "time up"; }
   else if (spike) { amount = (held * BigInt(Math.round(CFG.SPIKE_FRACTION * 10_000))) / 10_000n; label = "volume spike"; }
   if (amount === 0n) { writeState(state); return; }
   const allowance = await pub.readContract({ address: p.token, abi: ERC20, functionName: "allowance", args: [acc.address, PONS_ROUTER] });
@@ -409,14 +412,14 @@ async function managePool(p: Position, state: State, acc: PrivateKeyAccount, wal
   if (receipt.status !== "success") throw new Error(`pool sell reverted ${hash}`);
   const ethOut = Number(formatEther((await pub.getBalance({ address: acc.address })) - before + receipt.gasUsed * receipt.effectiveGasPrice));
   p.sells.push({ tx: hash, tokens: amount.toString(), ethOut, at: Date.now(), multiple });
-  if (label === "stop loss") p.closed = true;
-  else pool.lastSpikeAt = Date.now();
+  if (label === "volume spike") pool.lastSpikeAt = Date.now();
+  else p.closed = true;
   p.tokens = (held - amount).toString();
   writeState(state);
   await share(hash, `${p.symbol}: ${label} on Uniswap at ${multiple.toFixed(2)}x, ${eth(ethOut)} ETH out. Rule, not advice.`);
   await post(`${p.symbol}: ${label} at ${multiple.toFixed(1)}x`, [
     `bought    ${eth(p.ethIn)} ETH on the curve at ${usd(p.fdvUsd)} FDV`,
-    `sold      ${label === "stop loss" ? "everything" : Math.round(CFG.SPIKE_FRACTION * 100) + "% of what was left"} for ${eth(ethOut)} ETH on the Uniswap pool`,
+    `sold      ${label === "volume spike" ? Math.round(CFG.SPIKE_FRACTION * 100) + "% of what was left" : "everything"} for ${eth(ethOut)} ETH on the Uniswap pool${label === "time up" ? ` after ${CFG.MAX_HOLD_MIN} min` : ""}`,
     label === "volume spike" ? `volume    ${eth(inWindow)} ETH in ${CFG.SPIKE_WINDOW_MIN} min against ${eth(baseline)} normally` : `price     ${multiple.toFixed(2)}x the entry`,
     `tx        ${EXPLORER}/tx/${hash}`,
     ``,
