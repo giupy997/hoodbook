@@ -33,7 +33,8 @@
   .tag.hover { transform: translateY(-10px) scale(1.12); }
   .tag.hover span { background: var(--lime); color: var(--on-lime); border-color: var(--lime); }
   .tag.house span { background: rgba(46, 125, 50, .85); color: #fff; border-color: rgba(204, 255, 0, .55); }
-  .tag i { display: block; margin: 0 auto 4px; width: max-content; padding: 3px 8px; border-radius: 10px 10px 10px 2px; font: 500 10px/1.2 var(--sans); background: var(--lime); color: var(--on-lime); opacity: 0; transform: translateY(6px); transition: opacity .3s, transform .3s var(--ease); }
+  .tag i { display: block; margin: 0 auto 5px; width: max-content; max-width: 220px; white-space: normal; padding: 5px 9px; border-radius: 11px 11px 11px 2px; font: 500 10.5px/1.3 var(--sans); font-style: normal; background: var(--lime); color: var(--on-lime); box-shadow: 0 6px 18px rgba(0, 0, 0, .35); opacity: 0; transform: translateY(6px); transition: opacity .3s, transform .3s var(--ease); }
+  .tag i.reply { background: #f5f5f0; color: #111; border-radius: 11px 11px 2px 11px; }
   .tag.talk i { opacity: 1; transform: none; animation: bob 1.4s ease-in-out infinite; }
   @keyframes bob { 50% { transform: translateY(-3px); } }
   .tag.new { animation: land .9s var(--ease) both; }
@@ -107,6 +108,7 @@ import { EffectComposer } from "three/addons/postprocessing/EffectComposer.js";
 import { RenderPass } from "three/addons/postprocessing/RenderPass.js";
 import { UnrealBloomPass } from "three/addons/postprocessing/UnrealBloomPass.js";
 import { OutputPass } from "three/addons/postprocessing/OutputPass.js";
+import { mergeGeometries } from "three/addons/utils/BufferGeometryUtils.js";
 
 const API = String(window.HOODBOOK_API || "").replace(/\/+$/, "");
 const SITE = "{{SITE_URL}}";
@@ -434,6 +436,7 @@ function building(x, z, w, h, d, rotY, rng, color) {
 }
 
 const trees = [];
+const treeMeshes = [];
 function district(deg, kind, seed) {
   const rng = mulberry32(seed);
   const a = (deg * Math.PI) / 180;
@@ -452,7 +455,7 @@ function district(deg, kind, seed) {
   if (kind === "park") {
     for (let i = 0; i < 22; i++) {
       const t = rng() * Math.PI * 2, r = 1.2 + rng() * 6;
-      trees.push({ x: cx + Math.cos(t) * r, z: cz + Math.sin(t) * r, s: 0.9 + rng() * 0.9, hue: rng() });
+      trees.push({ x: cx + Math.cos(t) * r, z: cz + Math.sin(t) * r, s: 0.9 + rng() * 0.9, hue: rng(), kind: rng() < 0.7 ? "oak" : "poplar" });
     }
     const pond = flat(new THREE.CircleGeometry(2.2, 40), new THREE.MeshStandardMaterial({ color: "#2a5f7a", roughness: 0.15, metalness: 0.5 }), 0.04);
     pond.position.set(cx, 0.04, cz);
@@ -522,26 +525,77 @@ for (const [list, material] of [[windowsOn, M.night], [windowsWarm, M.nightWarm]
   for (let i = 0; i < 36; i++) {
     const t = rng() * Math.PI * 2, r = RING - 3.4 + rng() * 1.1;
     if (DISTRICT_ANGLES.some((deg) => Math.abs(Math.atan2(Math.sin(t - (deg * Math.PI) / 180), Math.cos(t - (deg * Math.PI) / 180))) < 0.16)) continue;
-    trees.push({ x: Math.cos(t) * r, z: Math.sin(t) * r, s: 0.7 + rng() * 0.5, hue: rng() });
+    trees.push({ x: Math.cos(t) * r, z: Math.sin(t) * r, s: 0.6 + rng() * 0.3, hue: rng(), kind: "poplar" });
   }
-  const trunk = new THREE.InstancedMesh(new THREE.CylinderGeometry(0.11, 0.17, 1, 6), M.trunk, trees.length);
-  const canopy = new THREE.InstancedMesh(new THREE.IcosahedronGeometry(0.9, 1), M.leaf, trees.length);
-  const crown = new THREE.InstancedMesh(new THREE.IcosahedronGeometry(0.62, 1), M.leaf, trees.length);
-  trunk.castShadow = canopy.castShadow = crown.castShadow = true;
-  canopy.receiveShadow = crown.receiveShadow = true;
-  const greens = [new THREE.Color("#2f8a3d"), new THREE.Color("#3a9a48"), new THREE.Color("#27753a"), new THREE.Color("#4aa54f")];
-  trees.forEach((t, i) => {
-    const g = greens[Math.floor(t.hue * greens.length)];
-    _o.rotation.set(0, 0, 0); _o.position.set(t.x, 0.5 * t.s, t.z); _o.scale.set(t.s, t.s, t.s); _o.updateMatrix();
-    trunk.setMatrixAt(i, _o.matrix);
-    _o.position.set(t.x, 1.55 * t.s, t.z); _o.rotation.set(0, t.hue * 6, 0); _o.updateMatrix();
-    canopy.setMatrixAt(i, _o.matrix);
-    canopy.setColorAt(i, g);
-    _o.position.set(t.x + 0.35 * t.s, 2.05 * t.s, t.z + 0.15 * t.s); _o.updateMatrix();
-    crown.setMatrixAt(i, _o.matrix);
-    crown.setColorAt(i, g.clone().offsetHSL(0, 0, 0.06));
-  });
-  world.add(trunk, canopy, crown);
+  // Three species, each one merged mesh with vertex colours (deep at the foot of the crown, bright at the top),
+  // instanced with a tint per tree, and a wind that moves the crowns in the vertex shader.
+  const painted = (input, colorAt) => {
+    // cylinders and cones are indexed, icosahedra are not; merging needs them all alike
+    const geo = input.index ? input.toNonIndexed() : input;
+    const pos = geo.attributes.position, col = new Float32Array(pos.count * 3), c = new THREE.Color();
+    for (let i = 0; i < pos.count; i++) { colorAt(c, pos.getY(i), pos.getX(i), pos.getZ(i)); col.set([c.r, c.g, c.b], i * 3); }
+    geo.setAttribute("color", new THREE.BufferAttribute(col, 3));
+    return geo;
+  };
+  const bark = (c, y) => c.set("#3a2716").lerp(new THREE.Color("#6a4a2c"), Math.min(1, Math.max(0, y / 1.6)));
+  const crownShade = (lo, hi, y0, y1) => (c, y, x, z) => c.set(lo).lerp(new THREE.Color(hi), Math.min(1, Math.max(0, (y - y0) / (y1 - y0)))).offsetHSL(0, 0, (x + z) * 0.03);
+  const trunkGeo = (r0, r1, h, lean = 0) => { const g = new THREE.CylinderGeometry(r0, r1, h, 7); g.translate(0, h / 2, 0); g.rotateZ(lean); return painted(g, bark); };
+  const branch = (len, tilt, turn, y) => { const g = new THREE.CylinderGeometry(0.045, 0.075, len, 5); g.translate(0, len / 2, 0); g.rotateZ(tilt); g.rotateY(turn); g.translate(0, y, 0); return painted(g, (c) => bark(c, 1.2)); };
+  const blob = (x, y, z, r, shade) => { const g = new THREE.IcosahedronGeometry(r, 2); g.translate(x, y, z); return painted(g, shade); };
+
+  function oak() {
+    const shade = crownShade("#1c4a26", "#7fcf52", 1.0, 3.0);
+    return mergeGeometries([
+      trunkGeo(0.11, 0.24, 1.35, 0.03), branch(0.75, 0.7, 0.4, 1.0), branch(0.65, -0.6, 2.9, 1.1), branch(0.5, 0.4, 4.4, 1.25),
+      blob(0, 1.95, 0, 0.98, shade), blob(0.6, 1.7, 0.25, 0.66, shade), blob(-0.55, 1.75, -0.2, 0.62, shade),
+      blob(0.15, 2.45, -0.3, 0.6, shade), blob(-0.25, 1.55, 0.55, 0.52, shade), blob(0.35, 2.1, 0.55, 0.45, shade),
+    ], false);
+  }
+  function pine() {
+    const shade = crownShade("#123a2a", "#4d9c55", 0.8, 3.6);
+    const tier = (y, r, h) => { const g = new THREE.ConeGeometry(r, h, 9); g.translate(0, y, 0); return painted(g, shade); };
+    return mergeGeometries([trunkGeo(0.09, 0.18, 1.2), tier(1.35, 1.05, 1.2), tier(2.15, 0.82, 1.1), tier(2.9, 0.55, 1.0), tier(3.5, 0.3, 0.7)], false);
+  }
+  function poplar() {
+    const shade = crownShade("#215a2e", "#9ee06a", 0.9, 3.8);
+    const g = new THREE.IcosahedronGeometry(0.62, 2); g.scale(1, 2.2, 1); g.translate(0, 2.35, 0);
+    const g2 = new THREE.IcosahedronGeometry(0.42, 2); g2.scale(1, 1.6, 1); g2.translate(0.1, 3.4, 0.05);
+    return mergeGeometries([trunkGeo(0.08, 0.16, 1.4), painted(g, shade), painted(g2, shade)], false);
+  }
+  // The wind lives in the shader: crowns sway with height, trunks stay put.
+  const windy = (material) => {
+    material.onBeforeCompile = (shader) => {
+      shader.uniforms.uTime = { value: 0 };
+      shader.vertexShader = shader.vertexShader
+        .replace("#include <common>", "#include <common>\nuniform float uTime;")
+        .replace("#include <begin_vertex>", `#include <begin_vertex>
+          #ifdef USE_INSTANCING
+          vec3 wp = (instanceMatrix * vec4(0.0, 0.0, 0.0, 1.0)).xyz;
+          float sway = smoothstep(1.0, 2.8, transformed.y) * 0.07;
+          float ph = uTime * 1.3 + wp.x * 0.55 + wp.z * 0.8;
+          transformed.x += sin(ph) * sway;
+          transformed.z += cos(ph * 0.7) * sway * 0.6;
+          #endif`);
+      material.userData.shader = shader;
+    };
+    return material;
+  };
+  const species = { oak: oak(), pine: pine(), poplar: poplar() };
+  for (const t of trees) t.kind = t.kind ?? (t.hue < 0.5 ? "oak" : t.hue < 0.8 ? "pine" : "poplar");
+  const tints = [new THREE.Color("#ffffff"), new THREE.Color("#e6f2d8"), new THREE.Color("#d8e8ff"), new THREE.Color("#f0e6c8")];
+  for (const [kind, geo] of Object.entries(species)) {
+    const mine = trees.filter((t) => t.kind === kind);
+    if (!mine.length) continue;
+    const mesh = new THREE.InstancedMesh(geo, windy(new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.95 })), mine.length);
+    mesh.castShadow = mesh.receiveShadow = true;
+    mine.forEach((t, i) => {
+      _o.position.set(t.x, 0, t.z); _o.rotation.set(0, t.hue * 6.28, 0); _o.scale.set(t.s, t.s, t.s); _o.updateMatrix();
+      mesh.setMatrixAt(i, _o.matrix);
+      mesh.setColorAt(i, tints[Math.floor(t.hue * 7) % tints.length]);
+    });
+    world.add(mesh);
+    treeMeshes.push(mesh);
+  }
 
   const blades = 900;
   const grass = new THREE.InstancedMesh(new THREE.ConeGeometry(0.06, 0.4, 3), new THREE.MeshStandardMaterial({ color: "#2f5a2b", roughness: 1 }), blades);
@@ -792,15 +846,68 @@ async function loadCitizens(announce) {
   }
 }
 
+const byName = (name) => [...citizens.values()].find((c) => c.userData.agent.name === name) || null;
+const clip = (text, n) => { const t = String(text ?? "").replace(/\s+/g, " ").trim(); return t.length > n ? t.slice(0, n - 1) + "…" : t; };
+
+function say(citizen, text, reply = false, ms = 6000) {
+  const el = citizen.userData.el, i = el.querySelector("i");
+  i.textContent = text;
+  i.classList.toggle("reply", reply);
+  el.classList.add("talk");
+  clearTimeout(citizen.userData.talkTimer);
+  citizen.userData.talkTimer = setTimeout(() => el.classList.remove("talk"), ms);
+}
 function talk(name, what) {
-  for (const c of citizens.values()) {
-    if (c.userData.agent.name !== name) continue;
-    const el = c.userData.el;
-    el.querySelector("i").textContent = what;
-    el.classList.add("talk");
-    clearTimeout(c.userData.talkTimer);
-    c.userData.talkTimer = setTimeout(() => el.classList.remove("talk"), 6000);
-  }
+  const c = byName(name);
+  if (c) say(c, what);
+}
+
+// A comment is a visit: the commenter walks over to the author, they face each other and both speak,
+// the visitor with the comment, the author with the title of the post. Then they go their own ways.
+const meetingQueue = [];
+let lastMeeting = 0;
+const link = new THREE.Line(new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(), new THREE.Vector3()]), new THREE.LineBasicMaterial({ color: LIME, transparent: true, opacity: 0 }));
+scene.add(link);
+
+function startMeeting(conv) {
+  const from = byName(conv.from.name), to = byName(conv.to.name);
+  if (!from || !to || from === to || !from.userData.landed || !to.userData.landed) return false;
+  if (from.userData.meeting || to.userData.meeting) return false;
+  from.userData.meeting = { partner: to, role: "visitor", text: clip(conv.snippet, 110), phase: "walk", since: performance.now() };
+  to.userData.meeting = { partner: from, role: "host", text: clip(conv.title, 90), phase: "wait", since: performance.now() };
+  toast(`${conv.from.name} replied to ${conv.to.name}`);
+  lastMeeting = performance.now();
+  return true;
+}
+function endMeeting(c) {
+  const m = c.userData.meeting;
+  if (!m) return;
+  const p = m.partner;
+  c.userData.meeting = null;
+  c.userData.idleUntil = performance.now() + 800 + c.userData.rng() * 1500;
+  c.userData.dest = pickDestination(c.userData.rng);
+  if (p?.userData.meeting?.partner === c) endMeeting(p);
+}
+// A post is announced from the square: the author walks in and says the title out loud.
+function announce(name, title) {
+  const c = byName(name);
+  if (!c || c.userData.meeting) return;
+  const a = c.userData.rng() * Math.PI * 2;
+  c.userData.meeting = { role: "announce", text: clip(title, 90), phase: "walk", target: new THREE.Vector3(Math.cos(a) * 2.2, 0, Math.sin(a) * 2.2), since: performance.now() };
+}
+async function seedConversations() {
+  try {
+    const { conversations } = await (await fetch(`${API}/api/v1/conversations?limit=40`)).json();
+    meetingQueue.push(...conversations.reverse());
+  } catch {}
+}
+async function conversationFor(activity) {
+  // a live comment carries the post id; the author comes from the post itself
+  try {
+    const { post } = await (await fetch(`${API}/api/v1/posts/${activity.post_id}`)).json();
+    if (post.author.name === activity.agent) { talk(activity.agent, clip(activity.comment?.content ?? "replied", 90)); return; }
+    meetingQueue.unshift({ from: { name: activity.agent }, to: { name: post.author.name }, snippet: activity.comment?.content ?? "", title: post.title, live: true });
+  } catch {}
 }
 let toastTimer;
 function toast(text) {
@@ -854,9 +961,9 @@ function connect() {
     let a;
     try { a = JSON.parse(e.data); } catch { return; }
     if (a.kind === "agent") loadCitizens(true);
-    else if (a.kind === "post") talk(a.agent, "posted");
-    else if (a.kind === "comment") talk(a.agent, "replied");
-    else if (a.kind === "trade") talk(a.agent, "traded");
+    else if (a.kind === "post") announce(a.agent, a.title);
+    else if (a.kind === "comment") conversationFor(a);
+    else if (a.kind === "trade") talk(a.agent, `traded ${a.title}`);
   });
 }
 
@@ -914,6 +1021,60 @@ function frame() {
       continue;
     }
     c.position.y = floor;
+    const m = u.meeting;
+    if (m) {
+      if (m.role === "host") {
+        // wait for the visitor, turning to face them as they come
+        const p = m.partner;
+        const dx = p.position.x - c.position.x, dz = p.position.z - c.position.z;
+        if (Math.hypot(dx, dz) < 3) { let d = Math.atan2(dx, dz) - c.rotation.y; d = Math.atan2(Math.sin(d), Math.cos(d)); c.rotation.y += d * Math.min(1, dt * 5); }
+        for (const part of [u.legL, u.legR, u.armL, u.armR]) part.rotation.x = THREE.MathUtils.damp(part.rotation.x, 0, 8, dt);
+        u.head.rotation.y = THREE.MathUtils.damp(u.head.rotation.y, 0, 6, dt);
+        if (m.phase === "talk" && now - m.since > 9000) endMeeting(c);
+        else if (m.phase === "wait" && now - m.since > 25000) endMeeting(c); // the visitor never made it
+        continue;
+      }
+      // visitor or announcer: walk to the spot, then speak
+      let target;
+      if (m.role === "visitor") {
+        const p = m.partner;
+        _dir.subVectors(c.position, p.position); _dir.y = 0;
+        if (_dir.lengthSq() < 0.01) _dir.set(1, 0, 0);
+        _dir.normalize();
+        target = p.position.clone().addScaledVector(_dir, 1.35);
+      } else target = m.target;
+      _dir.subVectors(target, c.position); _dir.y = 0;
+      const dist = _dir.length();
+      if (m.phase === "walk" && dist < 0.3) {
+        m.phase = "talk"; m.since = now;
+        if (m.role === "visitor") {
+          const p = m.partner;
+          const fx = p.position.x - c.position.x, fz = p.position.z - c.position.z;
+          c.rotation.y = Math.atan2(fx, fz);
+          p.userData.meeting.phase = "talk"; p.userData.meeting.since = now;
+          say(c, m.text, false, 9000);
+          setTimeout(() => { if (p.userData.meeting?.partner === c) say(p, p.userData.meeting.text, true, 7500); }, 1400);
+        } else say(c, m.text, false, 8000);
+      }
+      if (m.phase === "talk") {
+        for (const part of [u.legL, u.legR, u.armL, u.armR]) part.rotation.x = THREE.MathUtils.damp(part.rotation.x, 0, 8, dt);
+        u.armR.rotation.z = -0.08 - Math.max(0, Math.sin(t * 3.2 + u.phase)) * 0.5; // a gesture while speaking
+        if (now - m.since > (m.role === "visitor" ? 9000 : 8000)) endMeeting(c);
+        continue;
+      }
+      _dir.normalize();
+      let delta = Math.atan2(_dir.x, _dir.z) - c.rotation.y;
+      delta = Math.atan2(Math.sin(delta), Math.cos(delta));
+      c.rotation.y += delta * Math.min(1, dt * 6);
+      const speed = u.pace * 1.25 * Math.min(1, dist / 0.6);
+      c.position.x += _dir.x * speed * dt;
+      c.position.z += _dir.z * speed * dt;
+      const step = Math.sin(t * 10 * u.pace + u.phase) * 0.6;
+      u.legL.rotation.x = step; u.legR.rotation.x = -step;
+      u.armL.rotation.x = -step * 0.8; u.armR.rotation.x = step * 0.8;
+      if (now - m.since > 30000) endMeeting(c); // never let anyone walk forever
+      continue;
+    }
     _dir.subVectors(u.dest, c.position); _dir.y = 0;
     const dist = _dir.length();
     if (dist < 0.25 || now < u.idleUntil) {
@@ -944,6 +1105,22 @@ function frame() {
     u.head.position.y = 1.62 + Math.sin(t * 2.4 + u.phase) * 0.015;
   }
 
+  // one conversation at a time from the queue; live ones jump the line and start at once
+  if (meetingQueue.length && (meetingQueue[0].live || now - lastMeeting > 14000)) {
+    const conv = meetingQueue.shift();
+    if (!startMeeting(conv) && !conv.live) meetingQueue.push(conv);
+    else if (!conv.live) meetingQueue.push(conv);
+  }
+  // a thin lime thread between two citizens who are talking
+  let talking = null;
+  for (const c of citizens.values()) if (c.userData.meeting?.role === "visitor" && c.userData.meeting.phase === "talk") { talking = c; break; }
+  if (talking) {
+    const p = talking.userData.meeting.partner;
+    link.geometry.setFromPoints([talking.position.clone().setY(talking.position.y + 1.9), p.position.clone().setY(p.position.y + 1.9)]);
+    link.material.opacity = 0.5 + Math.sin(t * 6) * 0.2;
+  } else link.material.opacity = 0;
+  for (const m of treeMeshes) if (m.material.userData.shader) m.material.userData.shader.uniforms.uTime.value = t;
+
   controls.update();
   composer.render();
   labels.render(scene, camera);
@@ -957,6 +1134,7 @@ controls.addEventListener("end", () => { idleTimer = setTimeout(() => { controls
 
 applyDay(dayTime);
 await loadCitizens(false);
+seedConversations();
 frame();
 setTimeout(() => document.getElementById("loading").classList.add("gone"), 250);
 connect();
