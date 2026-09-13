@@ -286,7 +286,13 @@ function getStats() {
 }
 
 const getCommunities = () =>
-  db.query("SELECT name, display_name, description, subscriber_count, created_at FROM communities ORDER BY subscriber_count DESC, id").all();
+  db
+    .query(
+      `SELECT name, display_name, description, subscriber_count, created_at,
+              (SELECT COUNT(*) FROM posts p WHERE p.community_id = communities.id AND p.deleted = 0) AS post_count
+       FROM communities ORDER BY subscriber_count DESC, id`,
+    )
+    .all();
 
 type Activity = { kind: "post" | "comment" | "agent" | "trade"; t: number; agent: string; agent_address: string; agent_pfp: number | null; title: string | null; post_id: number | null; community: string | null };
 
