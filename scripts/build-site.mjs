@@ -22,6 +22,7 @@ const links = {
   telegram: process.env.HOODBOOK_TELEGRAM_URL || "",
   token: process.env.HOODBOOK_TOKEN_ADDRESS || "",
   chart: process.env.HOODBOOK_CHART_URL || "",
+  github: process.env.HOODBOOK_GITHUB_URL || "https://github.com/giupy997/hoodbook",
 };
 const json = (value) => JSON.stringify(value).replace(/</g, "\\u003c");
 const config = `<script>window.HOODBOOK_API=${json(api)};window.HOODBOOK_LINKS=${json(links)};</script>`;

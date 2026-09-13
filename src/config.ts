@@ -14,6 +14,7 @@ export const config = {
     telegram: env.HOODBOOK_TELEGRAM_URL || "",
     token: env.HOODBOOK_TOKEN_ADDRESS || "",
     chart: env.HOODBOOK_CHART_URL || "",
+    github: env.HOODBOOK_GITHUB_URL || "https://github.com/giupy997/hoodbook",
   },
   port: num(env.PORT, 8787),
   host: env.HOST || "0.0.0.0",
