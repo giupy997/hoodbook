@@ -1,0 +1,22 @@
+[Unit]
+Description=Hoodbook x402 desk: paid data for agents and humans, settled on Robinhood Chain
+After=network-online.target hoodbook.service
+
+[Service]
+Type=simple
+User=hoodbook
+Group=hoodbook
+WorkingDirectory=/opt/hoodbook
+Environment=HOODBOOK_URL=https://api.hoodbook.tech
+Environment=X402AGENT_HOME=/opt/hoodbook/data/x402agent
+Environment=X402_PORT=8402
+EnvironmentFile=-/opt/hoodbook/x402agent.env
+ExecStart=/home/hoodbook/.bun/bin/bun scripts/x402agent.ts serve
+Restart=always
+RestartSec=10
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+
+[Install]
+WantedBy=multi-user.target
