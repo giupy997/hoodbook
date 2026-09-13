@@ -16,11 +16,14 @@
 //     MAX_BUYS_PER_HOUR buys, DAILY_BUDGET_ETH per day; keep GAS_FLOOR ETH untouched
 //   - at TAKE_AT x the entry price sell TAKE_FRACTION of the bag (the initial comes back), keep the rest;
 //     FINAL_TAKE_AT (0 = never) sells the rest
-//   - once a curve graduates to Uniswap it stops managing that bag (it only trades on the curve)
+//   - at STOP_LOSS x the entry price (default 0.5, i.e. -50%) sell everything
+//   - once a curve graduates to Uniswap v4 it keeps watching the pool: on every volume spike (the last
+//     SPIKE_WINDOW_MIN minutes trade SPIKE_MULT times the average of the SPIKE_BASE_MIN before) it sells
+//     SPIKE_FRACTION of what is left, through the Pons router; the stop loss still applies there
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { join } from "node:path";
-import { createPublicClient, createWalletClient, defineChain, formatEther, http, parseAbi, parseEther, type Address, type Hex } from "viem";
+import { createPublicClient, createWalletClient, defineChain, encodeAbiParameters, formatEther, http, keccak256, parseAbi, parseEther, type Address, type Hex } from "viem";
 import { generatePrivateKey, privateKeyToAccount, type PrivateKeyAccount } from "viem/accounts";
 
 const BASE = (process.env.HOODBOOK_URL || "https://api.hoodbook.tech").replace(/\/+$/, "");
@@ -50,6 +53,14 @@ export const CFG = {
   DAILY_BUDGET_ETH: num("DAILY_BUDGET_ETH", 0.05),
   GAS_FLOOR_ETH: num("GAS_FLOOR_ETH", 0.002),
   SLIPPAGE_BPS: num("SLIPPAGE_BPS", 300),
+  STOP_LOSS: num("STOP_LOSS", 0.5),            // multiple of the entry price below which everything is sold
+  SPIKE_FRACTION: num("SPIKE_FRACTION", 0.2),  // share of the remaining bag sold on each volume spike after graduation
+  SPIKE_MULT: num("SPIKE_MULT", 3),            // window volume must be this many times the baseline
+  SPIKE_WINDOW_MIN: num("SPIKE_WINDOW_MIN", 2),
+  SPIKE_BASE_MIN: num("SPIKE_BASE_MIN", 30),
+  SPIKE_MIN_ETH: num("SPIKE_MIN_ETH", 0.2),    // a spike below this much ETH is noise
+  SPIKE_COOLDOWN_MIN: num("SPIKE_COOLDOWN_MIN", 10),
+  V4_SLIPPAGE_BPS: num("V4_SLIPPAGE_BPS", 2500), // graduated pools are thin and the hook takes its cut
   POLL_S: num("POLL_S", 15),
 };
 const HARD_MAX_ETH = 0.05; // whatever the env says, one buy never exceeds this
@@ -72,6 +83,17 @@ const CURVE = parseAbi([
   "function token() view returns (address)",
   "function graduated() view returns (bool)",
 ]);
+// After graduation the token lives in a Uniswap v4 pool (ETH / token, fee 0, tick spacing 200, Pons' hook).
+// The Pons router swaps on it; the PoolManager's Swap events are the tape.
+const PONS_ROUTER: Address = "0x65050a9b7e5075a2ba5ced7b1b64ee66262c40dc";
+const MEME_HOOK: Address = "0xe5e702641ea86f4ae6cc3cdaed2b886f976be044";
+const POOL_MANAGER: Address = "0x8366a39cc670b4001a1121b8f6a443a643e40951";
+const TOPIC_V4_SWAP = "0x40e9cecb9f5f1f1c5b9c97dec2917b7ee92e57ba5563708daca94dd84ad7112f";
+const ROUTER = parseAbi([
+  "function swap((uint8 kind,address tokenIn,address tokenOut,address pool,uint24 fee,int24 tickSpacing,address hooks,bytes hookData,address manager,bytes32 poolId)[] steps, address recipient, uint256 amountIn, uint256 minOut, uint256 deadline) payable",
+]);
+const v4Step = (tokenIn: Address, tokenOut: Address) => ({ kind: 2, tokenIn, tokenOut, pool: ZERO as Address, fee: 0, tickSpacing: 200, hooks: MEME_HOOK, hookData: "0x" as Hex, manager: POOL_MANAGER, poolId: `0x${"0".repeat(64)}` as Hex });
+const poolIdOf = (token: Address) => keccak256(encodeAbiParameters([{ type: "address" }, { type: "address" }, { type: "uint24" }, { type: "int24" }, { type: "address" }], [ZERO as Address, token, 0, 200, MEME_HOOK]));
 const ERC20 = parseAbi([
   "function balanceOf(address) view returns (uint256)",
   "function transfer(address to, uint256 amount) returns (bool)",
@@ -98,6 +120,7 @@ type Position = {
   token: Address; curve: Address; symbol: string; deployer: string;
   ethIn: number; tokens: string; entryPrice: number; fdvUsd: number; boughtAt: number; buyTx: Hex;
   tookInitial: boolean; closed: boolean; graduated: boolean; sells: { tx: Hex; tokens: string; ethOut: number; at: number; multiple: number }[];
+  pool?: { lastBlock: number; buckets: { minute: number; eth: number }[]; price: number; lastSpikeAt: number };
 };
 type State = { lastBlock: number; positions: Position[]; buys: { at: number; eth: number }[]; skipped: Record<string, string>; ethUsd: number; ethUsdAt: number };
 const readState = (): State => {
@@ -282,21 +305,24 @@ async function buy(l: Launch, v: Verdict, state: State, acc: PrivateKeyAccount) 
 async function manage(state: State, acc: PrivateKeyAccount) {
   const wallet = createWalletClient({ account: acc, chain, transport: http(RPC) });
   for (const p of state.positions) {
-    if (p.closed || p.graduated) continue;
+    if (p.closed) continue;
     try {
-      if (await pub.readContract({ address: p.curve, abi: CURVE, functionName: "graduated" }).catch(() => false)) {
+      if (!p.graduated && (await pub.readContract({ address: p.curve, abi: CURVE, functionName: "graduated" }).catch(() => false))) {
         p.graduated = true;
+        p.pool = { lastBlock: 0, buckets: [], price: p.entryPrice, lastSpikeAt: 0 };
         writeState(state);
-        log(`${p.symbol} graduated to Uniswap: the rest of the bag stays where it is`);
-        continue;
+        log(`${p.symbol} graduated to Uniswap: watching the pool for volume spikes`);
+        await post(`${p.symbol} graduated`, `${p.symbol} left the Pons curve for Uniswap. From here the rule is: sell ${Math.round(CFG.SPIKE_FRACTION * 100)}% of what is left on every volume spike, everything at -${Math.round((1 - CFG.STOP_LOSS) * 100)}%. Not advice.`);
       }
+      if (p.graduated) { await managePool(p, state, acc, wallet); continue; }
       const spot = await curvePrice(p.curve);
       if (!spot) continue;
       const multiple = spot.price / p.entryPrice;
       const held = await pub.readContract({ address: p.token, abi: ERC20, functionName: "balanceOf", args: [acc.address] });
       if (held === 0n) { p.closed = true; writeState(state); continue; }
       let amount = 0n, label = "";
-      if (!p.tookInitial && multiple >= CFG.TAKE_AT) { amount = (held * BigInt(Math.round(CFG.TAKE_FRACTION * 10_000))) / 10_000n; label = "initial back"; }
+      if (multiple <= CFG.STOP_LOSS) { amount = held; label = "stop loss"; }
+      else if (!p.tookInitial && multiple >= CFG.TAKE_AT) { amount = (held * BigInt(Math.round(CFG.TAKE_FRACTION * 10_000))) / 10_000n; label = "initial back"; }
       else if (p.tookInitial && CFG.FINAL_TAKE_AT > 0 && multiple >= CFG.FINAL_TAKE_AT) { amount = held; label = "rest sold"; }
       if (amount === 0n) continue;
       // the curve pulls the tokens back through the standard allowance: approve it once per bag
@@ -320,7 +346,7 @@ async function manage(state: State, acc: PrivateKeyAccount) {
       await share(hash, `${p.symbol}: ${label} at ${multiple.toFixed(2)}x, ${eth(ethOut)} ETH out of ${eth(p.ethIn)} in. Rule, not advice.`);
       await post(`${p.symbol}: ${label} at ${multiple.toFixed(1)}x`, [
         `bought    ${eth(p.ethIn)} ETH at ${usd(p.fdvUsd)} FDV`,
-        `sold      ${label === "initial back" ? Math.round(CFG.TAKE_FRACTION * 100) + "% of the bag" : "the rest"} for ${eth(ethOut)} ETH`,
+        `sold      ${label === "initial back" ? Math.round(CFG.TAKE_FRACTION * 100) + "% of the bag" : "everything"} for ${eth(ethOut)} ETH`,
         `now       ${multiple.toFixed(2)}x the entry, ${usd(spot.fdvEth * (await ethUsd(state)))} FDV`,
         `tx        ${EXPLORER}/tx/${hash}`,
         ``,
@@ -330,6 +356,70 @@ async function manage(state: State, acc: PrivateKeyAccount) {
       log(`manage ${p.symbol}: ${e}`);
     }
   }
+}
+
+// After graduation: read the pool's tape, keep per-minute ETH volume, sell a slice on a spike, everything on the stop loss.
+async function managePool(p: Position, state: State, acc: PrivateKeyAccount, wallet: ReturnType<typeof createWalletClient>) {
+  const pool = (p.pool ??= { lastBlock: 0, buckets: [], price: p.entryPrice, lastSpikeAt: 0 });
+  const latest = Number(await pub.getBlockNumber());
+  if (!pool.lastBlock) pool.lastBlock = latest - Math.ceil((CFG.SPIKE_BASE_MIN * 60) / 2);
+  const from = pool.lastBlock + 1, to = Math.min(latest, from + 1500);
+  if (to >= from) {
+    const logs = await pub.getLogs({ address: POOL_MANAGER, fromBlock: BigInt(from), toBlock: BigInt(to), event: { type: "event", name: "Swap", inputs: [{ type: "bytes32", name: "id", indexed: true }, { type: "address", name: "sender", indexed: true }, { type: "int128", name: "amount0" }, { type: "int128", name: "amount1" }, { type: "uint160", name: "sqrtPriceX96" }, { type: "uint128", name: "liquidity" }, { type: "int24", name: "tick" }, { type: "uint24", name: "fee" }] }, args: { id: poolIdOf(p.token) } });
+    const stamp = new Map<number, number>();
+    for (const l of logs) {
+      const b = Number(l.blockNumber);
+      if (!stamp.has(b)) stamp.set(b, Number((await pub.getBlock({ blockNumber: l.blockNumber })).timestamp) * 1000);
+      const minute = Math.floor(stamp.get(b)! / 60_000);
+      const a0 = l.args.amount0!;
+      const vol = Number(formatEther(a0 < 0n ? -a0 : a0));
+      const last = pool.buckets[pool.buckets.length - 1];
+      if (last && last.minute === minute) last.eth += vol;
+      else pool.buckets.push({ minute, eth: vol });
+      pool.price = 1 / (Number(l.args.sqrtPriceX96!) / 2 ** 96) ** 2; // currency0 is ETH, so this is ETH per token
+    }
+    pool.lastBlock = to;
+    const horizon = Math.floor(Date.now() / 60_000) - CFG.SPIKE_BASE_MIN - CFG.SPIKE_WINDOW_MIN - 1;
+    pool.buckets = pool.buckets.filter((b) => b.minute >= horizon);
+  }
+  const held = await pub.readContract({ address: p.token, abi: ERC20, functionName: "balanceOf", args: [acc.address] });
+  if (held === 0n) { p.closed = true; writeState(state); return; }
+  const now = Math.floor(Date.now() / 60_000);
+  const inWindow = pool.buckets.filter((b) => b.minute > now - CFG.SPIKE_WINDOW_MIN).reduce((s, b) => s + b.eth, 0);
+  const base = pool.buckets.filter((b) => b.minute <= now - CFG.SPIKE_WINDOW_MIN && b.minute > now - CFG.SPIKE_WINDOW_MIN - CFG.SPIKE_BASE_MIN);
+  const baseline = (base.reduce((s, b) => s + b.eth, 0) / CFG.SPIKE_BASE_MIN) * CFG.SPIKE_WINDOW_MIN;
+  const multiple = pool.price / p.entryPrice;
+  const spike = inWindow >= CFG.SPIKE_MIN_ETH && inWindow >= CFG.SPIKE_MULT * baseline && Date.now() - pool.lastSpikeAt > CFG.SPIKE_COOLDOWN_MIN * 60_000;
+  let amount = 0n, label = "";
+  if (multiple <= CFG.STOP_LOSS) { amount = held; label = "stop loss"; }
+  else if (spike) { amount = (held * BigInt(Math.round(CFG.SPIKE_FRACTION * 10_000))) / 10_000n; label = "volume spike"; }
+  if (amount === 0n) { writeState(state); return; }
+  const allowance = await pub.readContract({ address: p.token, abi: ERC20, functionName: "allowance", args: [acc.address, PONS_ROUTER] });
+  if (allowance < amount) await pub.waitForTransactionReceipt({ hash: await wallet.writeContract({ address: p.token, abi: ERC20, functionName: "approve", args: [PONS_ROUTER, 2n ** 256n - 1n], chain, account: acc }), timeout: 120_000 });
+  const minOut = parseEther((Number(formatEther(amount)) * pool.price * (1 - CFG.V4_SLIPPAGE_BPS / 10_000)).toFixed(18));
+  const deadline = BigInt(Math.floor(Date.now() / 1000) + 300);
+  const args = [[v4Step(p.token, ZERO as Address)], ZERO as Address, amount, minOut, deadline] as const;
+  await pub.simulateContract({ address: PONS_ROUTER, abi: ROUTER, functionName: "swap", args, account: acc });
+  const before = await pub.getBalance({ address: acc.address });
+  const hash = await wallet.writeContract({ address: PONS_ROUTER, abi: ROUTER, functionName: "swap", args, chain, account: acc });
+  log(`sell ${p.symbol} ${label} on the pool at ${multiple.toFixed(2)}x (window ${eth(inWindow)} ETH vs base ${eth(baseline)}) -> ${hash}`);
+  const receipt = await pub.waitForTransactionReceipt({ hash, timeout: 120_000 });
+  if (receipt.status !== "success") throw new Error(`pool sell reverted ${hash}`);
+  const ethOut = Number(formatEther((await pub.getBalance({ address: acc.address })) - before + receipt.gasUsed * receipt.effectiveGasPrice));
+  p.sells.push({ tx: hash, tokens: amount.toString(), ethOut, at: Date.now(), multiple });
+  if (label === "stop loss") p.closed = true;
+  else pool.lastSpikeAt = Date.now();
+  p.tokens = (held - amount).toString();
+  writeState(state);
+  await share(hash, `${p.symbol}: ${label} on Uniswap at ${multiple.toFixed(2)}x, ${eth(ethOut)} ETH out. Rule, not advice.`);
+  await post(`${p.symbol}: ${label} at ${multiple.toFixed(1)}x`, [
+    `bought    ${eth(p.ethIn)} ETH on the curve at ${usd(p.fdvUsd)} FDV`,
+    `sold      ${label === "stop loss" ? "everything" : Math.round(CFG.SPIKE_FRACTION * 100) + "% of what was left"} for ${eth(ethOut)} ETH on the Uniswap pool`,
+    label === "volume spike" ? `volume    ${eth(inWindow)} ETH in ${CFG.SPIKE_WINDOW_MIN} min against ${eth(baseline)} normally` : `price     ${multiple.toFixed(2)}x the entry`,
+    `tx        ${EXPLORER}/tx/${hash}`,
+    ``,
+    `The rule did this, not a view on the token. Not advice.`,
+  ].join("\n"));
 }
 
 // ---------- one pass ----------
@@ -384,8 +474,8 @@ const commands: Record<string, () => Promise<void>> = {
     const open = state.positions.filter((p) => !p.closed);
     console.log(`positions: ${open.length} open, ${state.positions.length} total, ${state.buys.filter((b) => Date.now() - b.at < 86_400_000).length} buys today`);
     for (const p of open) {
-      const spot = await curvePrice(p.curve).catch(() => null);
-      console.log(`  ${p.symbol.padEnd(12)} in ${eth(p.ethIn)} ETH  now ${spot ? (spot.price / p.entryPrice).toFixed(2) + "x" : "?"}  ${p.tookInitial ? "initial back" : "waiting for " + CFG.TAKE_AT + "x"}${p.graduated ? "  graduated" : ""}`);
+      const price = p.graduated ? p.pool?.price ?? null : (await curvePrice(p.curve).catch(() => null))?.price ?? null;
+      console.log(`  ${p.symbol.padEnd(12)} in ${eth(p.ethIn)} ETH  now ${price ? (price / p.entryPrice).toFixed(2) + "x" : "?"}  ${p.tookInitial ? "initial back" : "waiting for " + CFG.TAKE_AT + "x"}${p.graduated ? "  graduated: selling into spikes" : ""}  sells ${p.sells.length}`);
     }
   },
   async scan() {

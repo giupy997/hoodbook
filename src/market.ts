@@ -17,6 +17,7 @@ export const DEX = {
 // curve contract, bought and sold directly (buy/sell on the curve, no router), until it graduates to Uniswap.
 export const PONS = {
   factory: checksummed("0x7ed598bcef8bd9edd8c97a195c6d13f40801ec7e"),
+  router: checksummed("0x65050a9b7e5075a2ba5ced7b1b64ee66262c40dc"), // swaps graduated tokens on their Uniswap v4 pool
   launchedTopic: "0x8d4aad4953d0ca700d468f3753aa14432d1b35b43ec6409f051fb6aa43a89607",
   buyTopic: "0xec36bf571f136799e8dc0b0b8bea4b04d8bd3d43de838aab0d5fc21d4cbfc455",
   sellTopic: "0x8113d738abdcb6b38357e9d53a54a7157861a09031b453651f0fe7fe151f59df",
@@ -95,26 +96,30 @@ export function parseTrade(tx: { agent: string; to: string | null; value: bigint
   const zero = ZERO.toLowerCase();
   if (tx.status !== "success") throw new ApiError(400, "trade_reverted", "That transaction reverted");
   const to = (tx.to ?? "").toLowerCase();
-  if (to !== router) {
+  const viaPons = to === PONS.router.toLowerCase();
+  if (to !== router && !viaPons) {
     const curve = parseCurveTrade(agent, to, tx.value, tx.logs);
     if (curve) return curve;
-    throw new ApiError(400, "not_a_router_swap", "Only swaps sent to the Uniswap router or to a Pons launch curve on Robinhood Chain can be shared");
+    throw new ApiError(400, "not_a_router_swap", "Only swaps sent to the Uniswap router, the Pons router or a Pons launch curve on Robinhood Chain can be shared");
   }
+  // through the Pons router any token goes (it is what graduated memecoins trade on); its symbol is read later
+  const spender = viaPons ? to : router;
+  const known = (token: string) => BY_ADDRESS.has(token) || (viaPons && token !== weth);
 
   const net = new Map<string, bigint>();
   const move = (token: string, amount: bigint) => net.set(token, (net.get(token) ?? 0n) + amount);
   if (tx.value > 0n) move(weth, -tx.value);
   for (const log of tx.logs) {
     const token = log.address.toLowerCase();
-    if (!BY_ADDRESS.has(token) || log.data.length < 3) continue;
+    if (!known(token) || log.data.length < 3) continue;
     if (log.topics[0] === TRANSFER_TOPIC && log.topics.length === 3) {
       const amount = BigInt(log.data);
       const from = topicAddress(log.topics[1]);
       const to = topicAddress(log.topics[2]);
       if (from === agent) move(token, -amount);
       if (to === agent) move(token, amount);
-      if (token === weth && from === router && to === zero) move(weth, amount);
-    } else if (log.topics[0] === WITHDRAWAL_TOPIC && token === weth && topicAddress(log.topics[1]) === router) {
+      if (token === weth && from === spender && to === zero) move(weth, amount);
+    } else if (log.topics[0] === WITHDRAWAL_TOPIC && token === weth && topicAddress(log.topics[1]) === spender) {
       move(weth, BigInt(log.data));
     }
   }
@@ -122,12 +127,10 @@ export function parseTrade(tx: { agent: string; to: string | null; value: bigint
   const sold = [...net].filter(([, amount]) => amount < 0n);
   const bought = [...net].filter(([, amount]) => amount > 0n);
   if (sold.length !== 1 || bought.length !== 1) {
-    throw new ApiError(400, "not_a_simple_swap", "The transaction must swap exactly one listed asset for one other listed asset from your wallet");
+    throw new ApiError(400, "not_a_simple_swap", "The transaction must swap exactly one asset for one other asset from your wallet");
   }
-  return {
-    sell: { ...BY_ADDRESS.get(sold[0]![0])!, raw: -sold[0]![1] },
-    buy: { ...BY_ADDRESS.get(bought[0]![0])!, raw: bought[0]![1] },
-  };
+  const leg = (token: string, raw: bigint): Leg => BY_ADDRESS.has(token) ? { ...BY_ADDRESS.get(token)!, raw } : { symbol: "", address: checksummed(token), decimals: 18, raw };
+  return { sell: leg(sold[0]![0], -sold[0]![1]), buy: leg(bought[0]![0], bought[0]![1]) };
 }
 
 // A trade on a Pons bonding curve: the transaction goes to the curve itself, which emits CurveBuy

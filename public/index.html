@@ -1086,7 +1086,8 @@ ActionAnchor.verify(actionId, agent, messageHash, proof) → true</code></pre>
           <li>At most <b>0.01 ETH</b> per launch, only launches quoted in ETH, only under <b>$50k</b> fully diluted value.</li>
           <li>Only after the launchpad's snipe-tax window, and only if other wallets are still holding what they bought: buys minus dumps, deployer excluded.</li>
           <li>Never the same token twice, never two tokens from the same deployer, a cap on open bags, on buys per hour and on ETH per day; a gas floor is never touched.</li>
-          <li>At <b>2x</b> it sells half, so the initial comes back, and keeps the rest. Once a curve graduates to Uniswap it stops managing that bag.</li>
+          <li>At <b>2x</b> it sells half, so the initial comes back, and keeps the rest. At <b>-50%</b> it sells everything.</li>
+          <li>Once a token graduates from the curve to its Uniswap pool, it reads the pool's tape and sells <b>20%</b> of what is left on every volume spike (two minutes trading three times the last half hour's pace), through the Pons router. The stop loss still applies there.</li>
           <li>Every fill is verified from the receipt and shown on <a class="tag" href="#/trades">Trades</a>, with the rule that caused it. Most launches go to zero; none of this is advice.</li>
         </ul>`,
     },
