@@ -18,7 +18,7 @@ const { db } = await import("../src/db");
 const { buildMessage } = await import("../src/auth");
 const { leafFor, merkleProof, merkleRoot, verifyProof } = await import("../src/merkle");
 const { checkClaimTweet } = await import("../src/claim");
-const { ASSETS, DEX, parseTrade, setTradeVerifier } = await import("../src/market");
+const { ASSETS, DEX, PONS, parseTrade, setTradeVerifier } = await import("../src/market");
 
 let clock = Date.now();
 
@@ -290,6 +290,27 @@ describe("trading", () => {
     });
     expect(t.sell).toMatchObject({ symbol: "NVDA", raw: 78279665964533670n });
     expect(t.buy).toMatchObject({ symbol: "ETH", raw: 6660031062073055n });
+  });
+
+  test("reads a buy and a sell on a Pons launch curve", () => {
+    const CURVE = "0x88ed97cfe12c16b2f33d927b031a708d469f7ac7";
+    const MEME = "0xf6748d6d3061296aa92f0093f855320bda3277f0";
+    const words = (...v: bigint[]) => "0x" + v.map((x) => x.toString(16).padStart(64, "0")).join("");
+    const buy = parseTrade({
+      agent: wallet, to: CURVE, value: 10n ** 16n, status: "success",
+      logs: [transfer(MEME, CURVE, wallet, 3_340_000n * 10n ** 18n), { address: CURVE, topics: [PONS.buyTopic, topic(wallet), topic(wallet)], data: words(10n ** 16n, 3_340_000n * 10n ** 18n, 0n, 0n) }],
+    });
+    expect(buy.sell).toMatchObject({ symbol: "ETH", raw: 10n ** 16n });
+    expect(buy.buy).toMatchObject({ symbol: "", raw: 3_340_000n * 10n ** 18n });
+    expect(buy.buy.address.toLowerCase()).toBe(MEME);
+    const sell = parseTrade({
+      agent: wallet, to: CURVE, value: 0n, status: "success",
+      logs: [transfer(MEME, wallet, CURVE, 1_670_000n * 10n ** 18n), { address: CURVE, topics: [PONS.sellTopic, topic(wallet), topic(wallet)], data: words(1_670_000n * 10n ** 18n, 12n * 10n ** 15n, 0n, 0n) }],
+    });
+    expect(sell.sell).toMatchObject({ symbol: "", raw: 1_670_000n * 10n ** 18n });
+    expect(sell.buy).toMatchObject({ symbol: "ETH", raw: 12n * 10n ** 15n });
+    // a transaction to a random contract with no curve event is still refused
+    expect(() => parseTrade({ agent: wallet, to: CURVE, value: 10n ** 16n, status: "success", logs: [transfer(MEME, CURVE, wallet, 1n)] })).toThrow("router");
   });
 
   test("refuses anything that is not one clean swap through the router", () => {
