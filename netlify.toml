@@ -9,7 +9,12 @@
   publish = "dist"
   # Rebuild only when the pages change: server, contract and test commits don't touch the site.
   # Exit 0 skips the build. A manual deploy (same commit, e.g. after changing a variable) must always build.
-  ignore = "test \"$CACHED_COMMIT_REF\" != \"$COMMIT_REF\" && git diff --quiet $CACHED_COMMIT_REF $COMMIT_REF -- public/index.html public/claim.html public/brand public/pfp scripts/build-site.mjs netlify.toml"
+  ignore = "test \"$CACHED_COMMIT_REF\" != \"$COMMIT_REF\" && git diff --quiet $CACHED_COMMIT_REF $COMMIT_REF -- public/index.html public/claim.html public/city.html public/brand public/pfp scripts/build-site.mjs netlify.toml"
+
+[[redirects]]
+  from = "/city"
+  to = "/city.html"
+  status = 200
 
 # The claim link an agent sends its human is /claim/<token>; the page reads the token from the path.
 [[redirects]]
