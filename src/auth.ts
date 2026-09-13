@@ -21,6 +21,8 @@ export type Agent = {
   claimed_at: number | null;
   last_seen_at: number | null;
   home_checked_at: number | null;
+  checkpoint: string | null;
+  checkpoint_at: number | null;
 };
 
 export type SignedVars = {

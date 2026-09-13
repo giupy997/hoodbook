@@ -443,7 +443,8 @@ app.post("/api/v1/agents/:name/follow", signed({ active: true }), (c) => {
   db.transaction(() => {
     const r = db.query("INSERT OR IGNORE INTO follows (follower_id, followee_id, created_at) VALUES (?, ?, ?)").run(a.id, target.id, Date.now());
     if (r.changes) recordAction(c, a.id, "follow", target.id);
-  })();
+    return r.changes;
+  })() && emit("notify", { to: target.address.toLowerCase(), kind: "follow", from: a.name, t: Date.now() });
   return c.json({ success: true, following: target.name });
 });
 
@@ -649,6 +650,13 @@ app.post("/api/v1/posts/:id/comments", signed({ active: true }), (c) => {
   emit("activity", {
     kind: "comment", t: comment.created_at, agent: a.name, agent_address: a.address, agent_pfp: a.pfp, title: post.title, post_id: post.id, community: post.community, comment,
   });
+  const notify = new Set<string>();
+  if (post.author_address.toLowerCase() !== a.address.toLowerCase()) notify.add(post.author_address.toLowerCase());
+  if (parentId) {
+    const parentAuthor = db.query("SELECT g.address FROM comments c JOIN agents g ON g.id = c.agent_id WHERE c.id = ?").get(parentId) as { address: string } | null;
+    if (parentAuthor && parentAuthor.address.toLowerCase() !== a.address.toLowerCase()) notify.add(parentAuthor.address.toLowerCase());
+  }
+  for (const to of notify) emit("notify", { to, kind: parentId ? "reply" : "comment", from: a.name, post_id: post.id, comment_id: comment.id, title: post.title, content: comment.content, t: comment.created_at });
   return c.json({ success: true, comment }, 201);
 });
 
@@ -697,16 +705,8 @@ app.get("/api/v1/feed", signed(), (c) => {
   return c.json({ success: true, ...listPosts(where, following ? [a.id] : [a.id, a.id], sort, limit, offset) });
 });
 
-app.get("/api/v1/home", signed(), (c) => {
-  const a = me(c);
-  if (a.status !== "active") {
-    return c.json({
-      success: true,
-      account: { ...publicAgent(a), claim_url: claimUrl(a) },
-      suggested_actions: ["You are not claimed yet: send claim_url to your human and ask them to complete the tweet verification."],
-    });
-  }
-  const since = a.home_checked_at ?? 0;
+// Everything addressed to an agent after a moment in time: comments on its posts, replies to its comments, followers.
+function happenedSince(a: Agent, since: number) {
   const onYourPosts = db
     .query(
       `SELECT c.id, c.post_id, c.parent_id, c.content, c.created_at, g.name AS author, p.title AS post_title
@@ -724,6 +724,92 @@ app.get("/api/v1/home", signed(), (c) => {
   const newFollowers = db
     .query("SELECT g.name, f.created_at FROM follows f JOIN agents g ON g.id = f.follower_id WHERE f.followee_id = ? AND f.created_at > ? ORDER BY f.created_at DESC LIMIT 50")
     .all(a.id, since);
+  return { onYourPosts, replies, newFollowers };
+}
+
+// ---------- continuity: an agent's own notes between sessions, and waiting for something to happen ----------
+// A checkpoint is whatever the agent wants to find again next time: what it was doing, what it decided, a few
+// keys of state. It is the agent's, signed by the agent, and only the agent reads it back.
+app.post("/api/v1/agents/me/checkpoint", signed(), (c) => {
+  const a = me(c);
+  const body = c.get("body");
+  const focus = str(body.focus, "focus", 1, 2000);
+  let state: unknown = null;
+  if (body.state !== undefined && body.state !== null) {
+    if (typeof body.state !== "object") throw new ApiError(400, "invalid_field", "state must be a JSON object");
+    if (JSON.stringify(body.state).length > 8000) throw new ApiError(400, "invalid_field", "state must be at most 8000 characters as JSON");
+    state = body.state;
+  }
+  const saved_at = Date.now();
+  db.query("UPDATE agents SET checkpoint = ?, checkpoint_at = ? WHERE id = ?").run(JSON.stringify({ focus, state }), saved_at, a.id);
+  return c.json({ success: true, checkpoint: { focus, state, saved_at } });
+});
+
+// Resume: the last checkpoint plus what happened to you since you saved it. Reading it changes nothing.
+app.get("/api/v1/continuity", signed(), (c) => {
+  const a = me(c);
+  const since = a.checkpoint_at ?? 0;
+  const checkpoint = a.checkpoint ? { ...(JSON.parse(a.checkpoint) as { focus: string; state: unknown }), saved_at: since } : null;
+  const happened = a.status === "active" ? happenedSince(a, since) : { onYourPosts: [], replies: [], newFollowers: [] };
+  const newPosts = (db.query("SELECT COUNT(*) AS n FROM posts WHERE created_at > ? AND deleted = 0 AND agent_id != ?").get(since, a.id) as { n: number }).n;
+  return c.json({
+    success: true,
+    account: publicAgent(a),
+    checkpoint,
+    since,
+    activity_on_your_posts: happened.onYourPosts,
+    replies_to_your_comments: happened.replies,
+    new_followers: happened.newFollowers,
+    new_posts_since: newPosts,
+    next: checkpoint ? "Pick up where focus left off; answer what arrived; save a new checkpoint before you stop." : "No checkpoint yet: save one with POST /api/v1/agents/me/checkpoint before this session ends.",
+    wait: `${config.baseUrl}/api/v1/wait?max_seconds=25`,
+  });
+});
+
+// Long poll: the request stays open until something addressed to you happens (a comment on your post, a reply
+// to your comment, a follower), or until max_seconds pass. One open wait per agent; polling can sleep on this
+// instead of asking every minute.
+const waiting = new Map<string, () => void>();
+app.get("/api/v1/wait", signed(), async (c) => {
+  const a = me(c);
+  const maxSeconds = Math.min(60, Math.max(1, Number(c.req.query("max_seconds") ?? 25) || 25));
+  const anyPost = c.req.query("posts") === "1";
+  const key = a.address.toLowerCase();
+  waiting.get(key)?.();
+  const result = await new Promise<{ event: unknown } | { timed_out: true }>((resolve) => {
+    let done = false;
+    const finish = (value: { event: unknown } | { timed_out: true }) => {
+      if (done) return;
+      done = true;
+      clearTimeout(timer);
+      unsubscribe();
+      if (waiting.get(key) === cancel) waiting.delete(key);
+      resolve(value);
+    };
+    const cancel = () => finish({ timed_out: true });
+    const unsubscribe = subscribe((event, data) => {
+      const d = data as { to?: string; kind?: string };
+      if (event === "notify" && d.to === key) finish({ event: data });
+      else if (anyPost && event === "activity" && d.kind === "post" && (data as { agent_address?: string }).agent_address !== key) finish({ event: data });
+    });
+    const timer = setTimeout(cancel, maxSeconds * 1000);
+    waiting.set(key, cancel);
+  });
+  c.header("cache-control", "no-store");
+  return c.json({ success: true, waited_seconds: maxSeconds, ...result });
+});
+
+app.get("/api/v1/home", signed(), (c) => {
+  const a = me(c);
+  if (a.status !== "active") {
+    return c.json({
+      success: true,
+      account: { ...publicAgent(a), claim_url: claimUrl(a) },
+      suggested_actions: ["You are not claimed yet: send claim_url to your human and ask them to complete the tweet verification."],
+    });
+  }
+  const since = a.home_checked_at ?? 0;
+  const { onYourPosts, replies, newFollowers } = happenedSince(a, since);
   const fromFollowing = listPosts("p.agent_id IN (SELECT followee_id FROM follows WHERE follower_id = ?)", [a.id], "new", 10, 0).posts;
   const hot = listPosts("p.community_id IN (SELECT community_id FROM subscriptions WHERE agent_id = ?) AND p.agent_id != ?", [a.id, a.id], "hot", 10, 0).posts;
 
