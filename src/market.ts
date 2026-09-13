@@ -13,6 +13,15 @@ export const DEX = {
   weth: checksummed("0x0bd7d308f8e1639fab988df18a8011f41eacad73"),
 };
 
+// Pons, the launchpad most new memecoins on Robinhood Chain come from: every launch gets its own bonding
+// curve contract, bought and sold directly (buy/sell on the curve, no router), until it graduates to Uniswap.
+export const PONS = {
+  factory: checksummed("0x7ed598bcef8bd9edd8c97a195c6d13f40801ec7e"),
+  launchedTopic: "0x8d4aad4953d0ca700d468f3753aa14432d1b35b43ec6409f051fb6aa43a89607",
+  buyTopic: "0xec36bf571f136799e8dc0b0b8bea4b04d8bd3d43de838aab0d5fc21d4cbfc455",
+  sellTopic: "0x8113d738abdcb6b38357e9d53a54a7157861a09031b453651f0fe7fe151f59df",
+};
+
 export type Asset = { symbol: string; address: Address; decimals: number };
 
 const asset = (symbol: string, address: string, decimals = 18): Asset => ({ symbol, address: checksummed(address), decimals });
@@ -57,6 +66,8 @@ const FACTORY_ABI = [
 ] as const;
 const ERC20_ABI = [
   { type: "function", name: "balanceOf", stateMutability: "view", inputs: [{ type: "address" }], outputs: [{ type: "uint256" }] },
+  { type: "function", name: "symbol", stateMutability: "view", inputs: [], outputs: [{ type: "string" }] },
+  { type: "function", name: "decimals", stateMutability: "view", inputs: [], outputs: [{ type: "uint8" }] },
 ] as const;
 const POOL_ABI = [
   {
@@ -83,8 +94,11 @@ export function parseTrade(tx: { agent: string; to: string | null; value: bigint
   const weth = DEX.weth.toLowerCase();
   const zero = ZERO.toLowerCase();
   if (tx.status !== "success") throw new ApiError(400, "trade_reverted", "That transaction reverted");
-  if ((tx.to ?? "").toLowerCase() !== router) {
-    throw new ApiError(400, "not_a_router_swap", "Only swaps sent to the Uniswap router on Robinhood Chain can be shared");
+  const to = (tx.to ?? "").toLowerCase();
+  if (to !== router) {
+    const curve = parseCurveTrade(agent, to, tx.value, tx.logs);
+    if (curve) return curve;
+    throw new ApiError(400, "not_a_router_swap", "Only swaps sent to the Uniswap router or to a Pons launch curve on Robinhood Chain can be shared");
   }
 
   const net = new Map<string, bigint>();
@@ -116,6 +130,53 @@ export function parseTrade(tx: { agent: string; to: string | null; value: bigint
   };
 }
 
+// A trade on a Pons bonding curve: the transaction goes to the curve itself, which emits CurveBuy
+// (ETH in as msg.value, tokens out) or CurveSell (tokens in, ETH out in the event data, paid natively).
+// The token is whatever the curve sells: its symbol is read from the chain afterwards, never trusted blindly.
+function parseCurveTrade(agent: string, curve: string, value: bigint, logs: readonly LogLike[]): ParsedTrade | null {
+  const weth = DEX.weth.toLowerCase();
+  const word = (data: string, i: number) => BigInt("0x" + data.slice(2 + 64 * i, 2 + 64 * (i + 1)));
+  const event = logs.find((l) => l.address.toLowerCase() === curve && (l.topics[0] === PONS.buyTopic || l.topics[0] === PONS.sellTopic) && l.data.length >= 2 + 128);
+  if (!curve || !event) return null;
+  const transfers = logs.filter((l) => l.topics[0] === TRANSFER_TOPIC && l.topics.length === 3 && l.address.toLowerCase() !== weth && l.data.length >= 66);
+  const unknown = (address: string, raw: bigint): Leg => ({ symbol: "", address: checksummed(address), decimals: 18, raw });
+  if (event.topics[0] === PONS.buyTopic) {
+    const received = transfers.find((l) => topicAddress(l.topics[2]) === agent && topicAddress(l.topics[1]) === curve);
+    if (!received || value <= 0n) return null;
+    return { sell: { symbol: "ETH", address: DEX.weth, decimals: 18, raw: value }, buy: unknown(received.address, BigInt(received.data)) };
+  }
+  const sent = transfers.find((l) => topicAddress(l.topics[1]) === agent);
+  const ethOut = word(event.data, 1);
+  if (!sent || ethOut <= 0n) return null;
+  return { sell: unknown(sent.address, BigInt(sent.data)), buy: { symbol: "ETH", address: DEX.weth, decimals: 18, raw: ethOut } };
+}
+
+const tokenMeta = new Map<string, Promise<{ symbol: string; decimals: number }>>();
+// Symbol and decimals of a token that is not on the list, from the contract. Names are chosen by whoever
+// deployed the token, so the symbol is trimmed to plain printable characters; unreadable ones get the address.
+function readTokenMeta(address: Address): Promise<{ symbol: string; decimals: number }> {
+  const key = address.toLowerCase();
+  let hit = tokenMeta.get(key);
+  if (!hit) {
+    hit = (async () => {
+      const [symbol, decimals] = await Promise.all([
+        client.readContract({ address, abi: ERC20_ABI, functionName: "symbol" }).catch(() => ""),
+        client.readContract({ address, abi: ERC20_ABI, functionName: "decimals" }).catch(() => 18),
+      ]);
+      const clean = String(symbol).replace(/[^\x21-\x7e]/g, "").slice(0, 12);
+      return { symbol: clean || `${address.slice(0, 6)}…${address.slice(-4)}`, decimals: Number(decimals) };
+    })();
+    tokenMeta.set(key, hit);
+    hit.catch(() => tokenMeta.delete(key));
+  }
+  return hit;
+}
+
+async function resolveLeg(leg: Leg): Promise<Leg> {
+  if (leg.symbol) return leg;
+  return { ...leg, ...(await readTokenMeta(leg.address)) };
+}
+
 async function fetchTrade(hash: Hex, agent: string): Promise<VerifiedTrade> {
   let found: [Awaited<ReturnType<typeof client.getTransaction>>, Awaited<ReturnType<typeof client.getTransactionReceipt>>] | null = null;
   for (let attempt = 0; attempt < 4 && !found; attempt++) {
@@ -129,8 +190,8 @@ async function fetchTrade(hash: Hex, agent: string): Promise<VerifiedTrade> {
   const [tx, receipt] = found;
   if (tx.from.toLowerCase() !== agent.toLowerCase()) throw new ApiError(403, "not_your_trade", "That transaction was not sent from your wallet");
   const parsed = parseTrade({ agent, to: tx.to, value: tx.value, status: receipt.status, logs: receipt.logs });
-  const block = await client.getBlock({ blockNumber: receipt.blockNumber });
-  return { ...parsed, blockNumber: Number(receipt.blockNumber), tradedAt: Number(block.timestamp) * 1000 };
+  const [block, sell, buy] = await Promise.all([client.getBlock({ blockNumber: receipt.blockNumber }), resolveLeg(parsed.sell), resolveLeg(parsed.buy)]);
+  return { sell, buy, blockNumber: Number(receipt.blockNumber), tradedAt: Number(block.timestamp) * 1000 };
 }
 
 type Verifier = (hash: Hex, agent: string) => Promise<VerifiedTrade>;

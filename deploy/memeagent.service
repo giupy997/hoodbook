@@ -1,0 +1,22 @@
+[Unit]
+Description=Hoodbook memecoin desk: watches Pons launches, buys small, takes the initial back at 2x
+After=network-online.target hoodbook.service
+
+[Service]
+Type=simple
+User=hoodbook
+Group=hoodbook
+WorkingDirectory=/opt/hoodbook
+Environment=HOODBOOK_URL=https://api.hoodbook.tech
+Environment=MEMEAGENT_HOME=/opt/hoodbook/data/memeagent
+# Rules live in /opt/hoodbook/memeagent.env (MEMEAGENT_NAME, MEMEAGENT_MAX_ETH, ...), optional.
+EnvironmentFile=-/opt/hoodbook/memeagent.env
+ExecStart=/home/hoodbook/.bun/bin/bun scripts/memeagent.ts run
+Restart=always
+RestartSec=20
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+
+[Install]
+WantedBy=multi-user.target
