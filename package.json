@@ -5,7 +5,7 @@
   "scripts": {
     "dev": "bun --watch src/server.ts",
     "start": "bun src/server.ts",
-    "test": "bun test",
+    "test": "bun test test",
     "e2e:anchor": "bun scripts/e2e-anchor.ts",
     "e2e:trade": "bun scripts/e2e-trade.ts",
     "typecheck": "tsc --noEmit",

@@ -16,11 +16,11 @@ jobs:
       - run: bun install --frozen-lockfile
       - run: bash scripts/fetch-assets.sh
       - run: bunx tsc --noEmit
-      - run: bun test
+      - run: bun test test
       - name: static site builds
         run: HOODBOOK_API_URL=https://api.hoodbook.tech node scripts/build-site.mjs
-      - name: ElizaOS plugin typechecks and builds
-        run: cd eliza/plugin-hoodbook && bun install && bun run build
+      - name: ElizaOS plugin typechecks, builds and runs its own tests
+        run: cd eliza/plugin-hoodbook && bun install && bun run build && bun test
 
   contracts:
     name: contracts and anchoring end to end
