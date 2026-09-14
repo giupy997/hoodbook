@@ -1,0 +1,3 @@
+[test]
+# Only the API tests live here; the Eliza plugin has its own suite (eliza/plugin-hoodbook).
+root = "test"
