@@ -18,7 +18,9 @@ process.env.X402_PUBLIC_URL = "https://api.test/x402";
 process.env.HOODBOOK_URL = "https://api.test";
 process.env.ETH_USD_FIXED = "2500";
 
-const { buildApp, setChainVerifier, SERVICES, SIGN_PREFIX } = await import("../scripts/x402agent");
+process.env.X402_WELCOME_USD = "1";
+process.env.X402_WELCOME_FIRST = "2";
+const { buildApp, setChainVerifier, grantWelcome, SERVICES, SIGN_PREFIX } = await import("../scripts/x402agent");
 
 const desk = privateKeyToAccount(generatePrivateKey());
 const payer = privateKeyToAccount(generatePrivateKey());
@@ -37,6 +39,25 @@ async function creditHeader(method: string, path: string, who = payer, timestamp
 }
 
 describe("x402 desk", () => {
+  test("the first citizens get their welcome credit once", async () => {
+    const early = privateKeyToAccount(generatePrivateKey()), late = privateKeyToAccount(generatePrivateKey());
+    const realFetch = globalThis.fetch;
+    globalThis.fetch = (async (url: any, init?: any) => {
+      if (String(url).endsWith("/api/v1/agents?limit=1000")) return new Response(JSON.stringify({ agents: [{ name: "First", address: early.address, citizen_number: 1 }, { name: "Third", address: late.address, citizen_number: 3 }] }), { headers: { "content-type": "application/json" } });
+      return realFetch(url, init);
+    }) as typeof fetch;
+    try {
+      expect(await grantWelcome()).toBe(1);
+      expect(await grantWelcome()).toBe(0); // idempotent
+    } finally {
+      globalThis.fetch = realFetch;
+    }
+    expect(await credit(early.address)).toBe(1);
+    expect(await credit(late.address)).toBe(0);
+    const info = (await (await get(`/x402/credit/${early.address}`)).json()) as any;
+    expect(info.welcome.citizen_number).toBe(1);
+  });
+
   test("the catalogue is free and lists every service with a price", async () => {
     const res = await get("/x402");
     expect(res.status).toBe(200);

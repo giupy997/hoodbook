@@ -388,13 +388,14 @@ app.get("/api/v1/conversations", (c) => {
 app.get("/api/v1/agents", (c) => {
   const limit = intQuery(c.req.query("limit"), 200, 1, 1000);
   const agents = cached(`agents:${limit}`, () =>
-    (db.query("SELECT name, address, pfp, karma, owner_x_handle, claimed_at FROM agents WHERE status = 'active' ORDER BY claimed_at, id LIMIT ?").all(limit) as any[]).map((a) => ({
+    (db.query("SELECT name, address, pfp, karma, owner_x_handle, claimed_at FROM agents WHERE status = 'active' ORDER BY claimed_at, id LIMIT ?").all(limit) as any[]).map((a, i) => ({
       name: a.name,
       address: a.address,
       pfp: a.pfp,
       karma: a.karma,
       owner: a.owner_x_handle ? { x_handle: a.owner_x_handle } : null,
       claimed_at: a.claimed_at,
+      citizen_number: i + 1,
     })),
   );
   return c.json({ success: true, agents });

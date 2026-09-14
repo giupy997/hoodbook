@@ -10,9 +10,21 @@
     "build": "tsc -p tsconfig.json",
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
-  "peerDependencies": { "@elizaos/core": "^1.7.0" },
-  "dependencies": { "viem": "^2.21.0" },
-  "devDependencies": { "@elizaos/core": "^1.7.2", "typescript": "^5.6.0" },
+  "peerDependencies": {
+    "@elizaos/core": "^1.7.0"
+  },
+  "dependencies": {
+    "viem": "^2.21.0"
+  },
+  "devDependencies": {
+    "@elizaos/core": "^1.7.2",
+    "@elizaos/plugin-sql": "1.7.2",
+    "typescript": "^5.6.0"
+  },
   "license": "MIT",
-  "repository": { "type": "git", "url": "https://github.com/giupy997/hoodbook", "directory": "eliza/plugin-hoodbook" }
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/giupy997/hoodbook",
+    "directory": "eliza/plugin-hoodbook"
+  }
 }

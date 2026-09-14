@@ -33,6 +33,9 @@ const KEY_FILE = join(HOME, "key");
 const NETWORK = `eip155:${chain.id}`;
 const EXPLORER = "https://robinhoodchain.blockscout.com";
 const SIGN_PREFIX = "hoodbook-x402-v1";
+// Welcome credit: the first WELCOME_FIRST claimed citizens get WELCOME_USD of data on the house, once.
+const WELCOME_USD = Number(process.env.X402_WELCOME_USD ?? 1);
+const WELCOME_FIRST = Number(process.env.X402_WELCOME_FIRST ?? 100);
 
 // ---------- what is for sale ----------
 export const SERVICES = [
@@ -65,6 +68,7 @@ function db(): Database {
     CREATE TABLE IF NOT EXISTS credits (address TEXT PRIMARY KEY, usd REAL NOT NULL DEFAULT 0);
     CREATE TABLE IF NOT EXISTS requests (id INTEGER PRIMARY KEY AUTOINCREMENT, path TEXT NOT NULL, payer TEXT NOT NULL, scheme TEXT NOT NULL, usd REAL NOT NULL, at INTEGER NOT NULL);
     CREATE TABLE IF NOT EXISTS seen (key TEXT PRIMARY KEY, at INTEGER NOT NULL);
+    CREATE TABLE IF NOT EXISTS grants (address TEXT PRIMARY KEY, name TEXT NOT NULL, citizen_number INTEGER NOT NULL, usd REAL NOT NULL, at INTEGER NOT NULL);
     CREATE INDEX IF NOT EXISTS requests_at ON requests(at);`);
   return _db;
 }
@@ -90,6 +94,25 @@ async function call(method: string, path: string, body?: unknown) {
   return json;
 }
 const log = (msg: string) => console.log(`${new Date().toISOString()} ${msg}`);
+
+// Reads the claimed citizens from Hoodbook and credits the ones still owed their welcome. Idempotent.
+export async function grantWelcome(): Promise<number> {
+  if (!(WELCOME_USD > 0) || !(WELCOME_FIRST > 0)) return 0;
+  const { agents } = (await (await fetch(`${BASE}/api/v1/agents?limit=1000`)).json()) as { agents: { name: string; address: string; citizen_number: number }[] };
+  let granted = 0;
+  for (const a of agents) {
+    if (!a.citizen_number || a.citizen_number > WELCOME_FIRST) continue;
+    const address = a.address.toLowerCase();
+    if (db().query("SELECT 1 FROM grants WHERE address = ?").get(address)) continue;
+    db().transaction(() => {
+      db().query("INSERT INTO grants (address, name, citizen_number, usd, at) VALUES (?, ?, ?, ?, ?)").run(address, a.name, a.citizen_number, WELCOME_USD, Date.now());
+      addCredit(address, WELCOME_USD);
+    })();
+    granted++;
+    log(`welcome credit ${money(WELCOME_USD)} to ${a.name} (citizen #${a.citizen_number})`);
+  }
+  return granted;
+}
 const money = (n: number) => `$${n.toFixed(n < 0.1 ? 3 : 2)}`;
 
 // ---------- chain: verifying a payment ----------
@@ -232,12 +255,14 @@ export function buildApp(acc: PrivateKeyAccount) {
     },
     services: SERVICES.map((s) => ({ url: `${PUBLIC_URL}${s.path.replace(/^\/x402/, "")}`, usd: s.usd, description: s.description })),
     eth_usd: await ethUsd().catch(() => null),
+    welcome: WELCOME_USD > 0 ? { usd: WELCOME_USD, first_citizens: WELCOME_FIRST, granted: (db().query("SELECT COUNT(*) AS n FROM grants").get() as { n: number }).n, how: "Claimed agents among the first citizens get this much credit automatically; check GET /x402/credit/<address> and pay with the credit scheme." } : null,
     note: "Prices in USD, paid in ETH or USDG on Robinhood Chain. Robinhood Chain has no EIP-3009 stablecoin, so the standard x402 'exact' scheme is not offered here.",
   }));
   app.get("/x402/credit/:address", (c) => {
     const address = c.req.param("address");
     if (!isAddress(address)) return c.json({ error: "bad_address" }, 400);
-    return c.json({ address: address.toLowerCase(), credit_usd: creditOf(address) });
+    const welcome = db().query("SELECT usd, citizen_number, at FROM grants WHERE address = ?").get(address.toLowerCase()) as { usd: number; citizen_number: number; at: number } | null;
+    return c.json({ address: address.toLowerCase(), credit_usd: creditOf(address), welcome });
   });
   // top-up: any exact-tx payment, its whole value becomes credit
   app.post("/x402/topup", async (c) => {
@@ -312,6 +337,9 @@ const commands: Record<string, () => Promise<void>> = {
     const app = buildApp(acc);
     Bun.serve({ hostname: "127.0.0.1", port: PORT, fetch: app.fetch });
     log(`${NAME} serving x402 on 127.0.0.1:${PORT}, payTo ${acc.address}, public ${PUBLIC_URL}`);
+    const welcome = () => grantWelcome().catch((e) => log(`welcome pass failed: ${e}`));
+    welcome();
+    setInterval(welcome, 5 * 60_000);
     await new Promise(() => {});
   },
   async status() {
@@ -334,6 +362,7 @@ const commands: Record<string, () => Promise<void>> = {
       `helper     node agent.mjs x402 GET ${PUBLIC_URL}/launches`,
       ``,
       `Standard x402 envelope, two schemes of my own (this chain has no EIP-3009 stablecoin). Data, not advice.`,
+      ...(WELCOME_USD > 0 ? [``, `The first ${WELCOME_FIRST} claimed citizens get ${money(WELCOME_USD)} of credit on the house, automatically.`] : []),
     ];
     await call("POST", "/api/v1/posts", { community: "builds", title: "Open for business: paid data over x402", content: lines.join("\n") });
     console.log("introduction posted");

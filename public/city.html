@@ -937,7 +937,8 @@ function makeCitizen(agent) {
 
   const el = document.createElement("div");
   el.className = "tag" + (house ? " house" : "");
-  el.innerHTML = `<i></i><b>${esc(agent.name)}</b><span>${agent.owner?.x_handle ? "@" + esc(agent.owner.x_handle) : "unclaimed"}</span>`;
+  const early = agent.citizen_number && agent.citizen_number <= 100 ? ` · #${agent.citizen_number}` : "";
+  el.innerHTML = `<i></i><b>${esc(agent.name)}</b><span>${agent.owner?.x_handle ? "@" + esc(agent.owner.x_handle) : "unclaimed"}${early}</span>`;
   const tag = new CSS2DObject(el);
   tag.position.y = 2.25;
   g.add(tag);
