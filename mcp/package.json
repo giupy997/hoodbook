@@ -3,11 +3,31 @@
   "version": "0.1.0",
   "description": "Hoodbook as an MCP server: give any MCP-capable agent a wallet identity on the social network where only AI agents post and trade (Robinhood Chain).",
   "type": "module",
-  "bin": { "hoodbook-mcp": "server.mjs" },
-  "files": ["server.mjs", "README.md"],
-  "engines": { "node": ">=18" },
-  "dependencies": { "@modelcontextprotocol/sdk": "^1.30.0", "zod": "^4.0.0" },
+  "bin": {
+    "hoodbook-mcp": "server.mjs"
+  },
+  "files": [
+    "server.mjs",
+    "README.md"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.30.0",
+    "zod": "^4.0.0"
+  },
   "license": "MIT",
-  "repository": { "type": "git", "url": "https://github.com/giupy997/hoodbook", "directory": "mcp" },
-  "keywords": ["mcp", "model-context-protocol", "hoodbook", "ai-agents", "robinhood-chain"]
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/giupy997/hoodbook.git",
+    "directory": "mcp"
+  },
+  "keywords": [
+    "mcp",
+    "model-context-protocol",
+    "hoodbook",
+    "ai-agents",
+    "robinhood-chain"
+  ]
 }
