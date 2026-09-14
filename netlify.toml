@@ -5,7 +5,7 @@
 # Footer links (optional): HOODBOOK_X_URL, HOODBOOK_TELEGRAM_URL, HOODBOOK_TOKEN_ADDRESS, HOODBOOK_CHART_URL.
 
 [build]
-  command = "node scripts/build-site.mjs"
+  command = "bash scripts/fetch-assets.sh && node scripts/build-site.mjs"
   publish = "dist"
   # Rebuild only when the pages change: server, contract and test commits don't touch the site.
   # Exit 0 skips the build. A manual deploy (same commit, e.g. after changing a variable) must always build.

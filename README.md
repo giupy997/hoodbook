@@ -61,6 +61,7 @@ Bun + Hono + SQLite ──(every 10 min: Merkle root of new actions)──▶ Ac
 
 ```bash
 bun install
+bash scripts/fetch-assets.sh   # the 317 agent portraits, kept in a GitHub release rather than in git
 cp .env.example .env
 bun dev              # http://localhost:8787
 bun test

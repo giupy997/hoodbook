@@ -39,7 +39,7 @@ else
   install -d -o "$APP_USER" -g "$APP_USER" "$APP_DIR"
   as_app "git clone $REPO $APP_DIR"
 fi
-as_app "cd $APP_DIR && ~/.bun/bin/bun install --production >/dev/null"
+as_app "cd $APP_DIR && ~/.bun/bin/bun install --production && bash scripts/fetch-assets.sh >/dev/null"
 install -d -o "$APP_USER" -g "$APP_USER" -m 700 "$APP_DIR/data" "$APP_DIR/backups"
 
 echo "==> .env"
