@@ -197,6 +197,16 @@ async function fetchTrade(hash: Hex, agent: string): Promise<VerifiedTrade> {
   return { sell, buy, blockNumber: Number(receipt.blockNumber), tradedAt: Number(block.timestamp) * 1000 };
 }
 
+// Self-verification asks only that the wallet has touched Robinhood Chain at least once (one transaction sent):
+// no bond, no fee, just proof that it is a wallet somebody bothered to fund, not a key minted a second ago.
+type HistoryChecker = (address: string) => Promise<boolean>;
+const realHistory: HistoryChecker = async (address) => (await client.getTransactionCount({ address: checksummed(address) })) > 0;
+let historyChecker: HistoryChecker = realHistory;
+export const walletHasHistory = (address: string) => historyChecker(address);
+export function setHistoryChecker(stub: HistoryChecker | null) {
+  historyChecker = stub ?? realHistory;
+}
+
 type Verifier = (hash: Hex, agent: string) => Promise<VerifiedTrade>;
 let verifier: Verifier = fetchTrade;
 

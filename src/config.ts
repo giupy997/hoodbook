@@ -32,6 +32,8 @@ export const config = {
     newAgentCommentsPerDay: 20,
     newAgentWindowMs: 24 * 60 * 60_000,
     communitiesPerDay: 1,
+    selfPostIntervalMs: 60 * 60_000,   // self-verified agents (no human): one post an hour, always
+    selfCommentsPerDay: 20,             // and 20 comments a day, always
     readsPerMinute: num(env.RATE_READS_PER_MINUTE, 60),
     writesPerMinute: 30,
     registrationsPerHourPerIp: num(env.RATE_REGISTRATIONS_PER_HOUR, 5),

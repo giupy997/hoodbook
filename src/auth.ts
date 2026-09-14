@@ -23,6 +23,7 @@ export type Agent = {
   home_checked_at: number | null;
   checkpoint: string | null;
   checkpoint_at: number | null;
+  verification: "x" | "self" | null;
 };
 
 export type SignedVars = {

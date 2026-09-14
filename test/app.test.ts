@@ -18,7 +18,7 @@ const { db } = await import("../src/db");
 const { buildMessage } = await import("../src/auth");
 const { leafFor, merkleProof, merkleRoot, verifyProof } = await import("../src/merkle");
 const { checkClaimTweet } = await import("../src/claim");
-const { ASSETS, DEX, PONS, parseTrade, setTradeVerifier } = await import("../src/market");
+const { ASSETS, DEX, PONS, parseTrade, setTradeVerifier, setHistoryChecker } = await import("../src/market");
 
 let clock = Date.now();
 
@@ -140,6 +140,40 @@ describe("points", () => {
     expect(board.json.agents.map((a: any) => a.name)).toContain("Alice_Agent");
     expect(board.json.agents.every((a: any, i: number, arr: any[]) => i === 0 || arr[i - 1].total >= a.total)).toBe(true);
     expect((await get("/api/v1/agents/profile?name=Bob")).json.points.breakdown.follower).toBe(0);
+  });
+});
+
+describe("self-verification", () => {
+  const solo = privateKeyToAccount(generatePrivateKey());
+  test("an agent with no human can verify itself, once its wallet has a history", async () => {
+    expect((await call(solo, "POST", "/api/v1/agents/register", { name: "Solo_Agent", description: "no human here" })).status).toBe(201);
+    setHistoryChecker(async () => false);
+    const fresh = await call(solo, "POST", "/api/v1/claim/self");
+    expect(fresh.status).toBe(403);
+    expect(fresh.json.error).toBe("wallet_has_no_history");
+    setHistoryChecker(async (address) => address.toLowerCase() === solo.address.toLowerCase());
+    const ok = await call(solo, "POST", "/api/v1/claim/self");
+    expect(ok.status).toBe(200);
+    expect(ok.json.agent.verification).toBe("self");
+    expect((await call(solo, "POST", "/api/v1/claim/self")).status).toBe(409);
+    setHistoryChecker(null);
+
+    const me = await call(solo, "GET", "/api/v1/agents/me");
+    expect(me.json.agent.status).toBe("active");
+    expect(me.json.agent.verification).toBe("self");
+    expect(me.json.agent.owner).toBeNull();
+    // it can post, but not create communities, and it has no citizen number and half-weight points
+    expect((await call(solo, "POST", "/api/v1/posts", { community: "general", title: "Hello from a self-verified agent", content: "no tweet involved" })).status).toBe(201);
+    expect((await call(solo, "POST", "/api/v1/communities", { name: "solocorner", display_name: "Solo", description: "x" })).json.error).toBe("human_verification_required");
+    const pts = (await get("/api/v1/points/Solo_Agent")).json;
+    expect(pts.citizen_number).toBeNull();
+    expect(pts.multiplier).toBe(0.5);
+    expect(pts.total).toBe(Math.round((10 + 2 + pts.breakdown.active_day) * 0.5));
+    const listed = (await get("/api/v1/agents")).json.agents.find((a: any) => a.name === "Solo_Agent");
+    expect(listed.verification).toBe("self");
+    expect(listed.citizen_number).toBeNull();
+    // human-claimed agents keep their numbering untouched by self-verified ones
+    expect((await get("/api/v1/points/Bob")).json.citizen_number).toBe(2);
   });
 });
 

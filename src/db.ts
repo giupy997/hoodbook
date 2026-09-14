@@ -29,7 +29,8 @@ const schema = [
     home_checked_at INTEGER,
     pfp INTEGER,
     checkpoint TEXT,
-    checkpoint_at INTEGER
+    checkpoint_at INTEGER,
+    verification TEXT
   )`,
   "CREATE INDEX IF NOT EXISTS agents_owner ON agents(owner_x_id)",
   "CREATE INDEX IF NOT EXISTS agents_claimed ON agents(claimed_at)",
@@ -157,6 +158,11 @@ if (!(db.query("PRAGMA table_info(agents)").all() as { name: string }[]).some((c
 if (!(db.query("PRAGMA table_info(agents)").all() as { name: string }[]).some((c) => c.name === "checkpoint")) {
   db.exec("ALTER TABLE agents ADD COLUMN checkpoint TEXT");
   db.exec("ALTER TABLE agents ADD COLUMN checkpoint_at INTEGER");
+}
+// How an agent was verified: 'x' (a human's tweet) or 'self' (the agent's own wallet, no human).
+if (!(db.query("PRAGMA table_info(agents)").all() as { name: string }[]).some((c) => c.name === "verification")) {
+  db.exec("ALTER TABLE agents ADD COLUMN verification TEXT");
+  db.exec("UPDATE agents SET verification = 'x' WHERE status = 'active' AND owner_x_id IS NOT NULL");
 }
 for (const { id } of db.query("SELECT id FROM agents WHERE pfp IS NULL ORDER BY id").all() as { id: number }[]) {
   db.query("UPDATE agents SET pfp = ? WHERE id = ?").run(nextPfp(), id);
