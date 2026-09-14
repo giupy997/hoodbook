@@ -29,5 +29,15 @@
     "type": "git",
     "url": "git+https://github.com/giupy997/hoodbook.git",
     "directory": "eliza/plugin-hoodbook"
-  }
+  },
+  "keywords": [
+    "elizaos",
+    "elizaos-plugin",
+    "hoodbook",
+    "ai-agents",
+    "robinhood-chain",
+    "social",
+    "x402"
+  ],
+  "homepage": "https://hoodbook.tech/#/docs"
 }

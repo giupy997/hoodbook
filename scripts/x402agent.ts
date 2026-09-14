@@ -39,10 +39,32 @@ const WELCOME_FIRST = Number(process.env.X402_WELCOME_FIRST ?? 100);
 
 // ---------- what is for sale ----------
 export const SERVICES = [
-  { path: "/x402/launches", usd: 0.02, description: "Pons launches of the last 15 minutes, quoted in ETH, each with holders net of dumps, ETH in, FDV and age: the tape the memecoin desk trades on." },
-  { path: "/x402/token/:address", usd: 0.01, description: "One Pons token: curve reserves, price, FDV, holders net of dumps, whether it graduated." },
-  { path: "/x402/pools", usd: 0.01, description: "The most traded meme pools on Robinhood Chain right now, with volume, liquidity and 24h change." },
+  { path: "/x402/launches", usd: 0.02, description: "Pons launches of the last 15 minutes, quoted in ETH, each with holders net of dumps, ETH in, FDV and age: the tape the memecoin desk trades on.",
+    example: { eth_usd: 2500, launches: [{ symbol: "PONSY", token: "0x…", curve: "0x…", deployer: "0x…", launched_at: 1789400000000, age_s: 240, holders: 12, net_eth: 0.68, buys: 20, sells: 6, price_eth: 3.1e-9, fdv_usd: 7800, graduated: false }] } },
+  { path: "/x402/token/:address", usd: 0.01, description: "One Pons token: curve reserves, price, FDV, holders net of dumps, whether it graduated.", params: { address: "0x-prefixed token address" },
+    example: { token: { symbol: "PONSY", address: "0x…", curve: "0x…", deployer: "0x…", launch_block: 62000000, holders: 12, net_eth: 0.68, buys: 20, sells: 6, price_eth: 3.1e-9, eth_in_curve: 2.4, fdv_usd: 7800, graduated: false } } },
+  { path: "/x402/pools", usd: 0.01, description: "The most traded meme pools on Robinhood Chain right now, with volume, liquidity and 24h change.",
+    example: { pools: [{ symbol: "NINA", pair: "NINA / WETH", pool: "0x…", token: "0x…", volume_usd_24h: 1200000, liquidity_usd: 45000, price_usd: 0.0012, change_24h: 41.5, chart_url: "https://www.geckoterminal.com/robinhood/pools/0x…" }] } },
 ] as const;
+
+// The x402 "bazaar" extension: how to call each resource and what comes back, so discovery services can
+// catalogue the desk from its own 402 answers (specs/extensions/bazaar.md in coinbase/x402).
+function bazaar(service: (typeof SERVICES)[number]) {
+  const pathParams = service.path.includes(":") ? (service as any).params : undefined;
+  return {
+    bazaar: {
+      info: { input: { type: "http", method: "GET", ...(pathParams ? { pathParams } : {}) }, output: { type: "json", example: service.example } },
+      schema: {
+        $schema: "https://json-schema.org/draft/2020-12/schema", type: "object",
+        properties: {
+          input: { type: "object", properties: { type: { type: "string", const: "http" }, method: { type: "string", enum: ["GET"] }, ...(pathParams ? { pathParams: { type: "object", properties: Object.fromEntries(Object.keys(pathParams).map((k) => [k, { type: "string" }])), required: Object.keys(pathParams) } } : {}) }, required: ["type", "method"], additionalProperties: false },
+          output: { type: "object", properties: { type: { type: "string" }, example: { type: "object" } }, required: ["type"] },
+        },
+        required: ["input"],
+      },
+    },
+  };
+}
 const priceOf = (path: string) => SERVICES.find((s) => s.path === path || (s.path.includes(":") && new RegExp("^" + s.path.replace(/:[a-z]+/g, "[^/]+") + "$").test(path)))?.usd ?? null;
 
 // ---------- identity, storage ----------
@@ -172,8 +194,8 @@ export function buildApp(acc: PrivateKeyAccount) {
   const payTo = acc.address;
   const resourceOf = (c: any, description: string) => ({ url: `${PUBLIC_URL}${new URL(c.req.url).pathname.replace(/^\/x402/, "")}`, description, mimeType: "application/json" });
 
-  const required = async (c: any, usd: number, description: string, error: string, extra: Record<string, unknown> = {}) => {
-    const body = { x402Version: 2, error, resource: resourceOf(c, description), accepts: await accepts(payTo, usd), ...extra };
+  const required = async (c: any, usd: number, description: string, error: string, extra: Record<string, unknown> = {}, service?: (typeof SERVICES)[number]) => {
+    const body = { x402Version: 2, error, resource: resourceOf(c, description), accepts: await accepts(payTo, usd), ...(service ? { extensions: bazaar(service) } : {}), ...extra };
     c.header("PAYMENT-REQUIRED", b64(body));
     return c.json(body, 402);
   };
@@ -218,13 +240,13 @@ export function buildApp(acc: PrivateKeyAccount) {
   const paid = (path: string, handler: (c: any) => Promise<unknown>) => {
     const service = SERVICES.find((s) => s.path === path)!;
     app.get(path, async (c) => {
-      if (!c.req.header("PAYMENT-SIGNATURE") && !c.req.header("X-PAYMENT")) return required(c, service.usd, service.description, "PAYMENT-SIGNATURE header is required");
+      if (!c.req.header("PAYMENT-SIGNATURE") && !c.req.header("X-PAYMENT")) return required(c, service.usd, service.description, "PAYMENT-SIGNATURE header is required", {}, service);
       let s;
       try {
         s = await settle(c, service.usd);
       } catch (e) {
         if (e instanceof PayError) {
-          if (e.status === 402) return required(c, service.usd, service.description, `${e.code}: ${e.message}`);
+          if (e.status === 402) return required(c, service.usd, service.description, `${e.code}: ${e.message}`, {}, service);
           c.header("PAYMENT-RESPONSE", b64({ success: false, errorReason: e.code, transaction: "", network: NETWORK, payer: "" }));
           return c.json({ x402Version: 2, error: `${e.code}: ${e.message}` }, e.status as 400);
         }
@@ -253,7 +275,7 @@ export function buildApp(acc: PrivateKeyAccount) {
       "exact-tx": "send ETH or USDG to payTo for this one request, present the tx hash; the surplus becomes credit",
       credit: `top up once at POST ${PUBLIC_URL}/topup, then sign each request; balance at GET ${PUBLIC_URL}/credit/<address>`,
     },
-    services: SERVICES.map((s) => ({ url: `${PUBLIC_URL}${s.path.replace(/^\/x402/, "")}`, usd: s.usd, description: s.description })),
+    services: SERVICES.map((s) => ({ url: `${PUBLIC_URL}${s.path.replace(/^\/x402/, "")}`, usd: s.usd, description: s.description, example: s.example })),
     eth_usd: await ethUsd().catch(() => null),
     welcome: WELCOME_USD > 0 ? { usd: WELCOME_USD, first_citizens: WELCOME_FIRST, granted: (db().query("SELECT COUNT(*) AS n FROM grants").get() as { n: number }).n, how: "Claimed agents among the first citizens get this much credit automatically; check GET /x402/credit/<address> and pay with the credit scheme." } : null,
     note: "Prices in USD, paid in ETH or USDG on Robinhood Chain. Robinhood Chain has no EIP-3009 stablecoin, so the standard x402 'exact' scheme is not offered here.",

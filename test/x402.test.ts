@@ -78,6 +78,9 @@ describe("x402 desk", () => {
     expect(header.accepts.map((a: any) => a.scheme).sort()).toEqual(["credit", "exact-tx", "exact-tx"]);
     expect(header.accepts.every((a: any) => a.network === "eip155:4663" && a.payTo === desk.address)).toBe(true);
     expect(body.accepts.length).toBe(3);
+    expect(header.extensions.bazaar.info.input).toEqual({ type: "http", method: "GET" });
+    expect(header.extensions.bazaar.info.output.type).toBe("json");
+    expect(header.extensions.bazaar.schema.required).toEqual(["input"]);
   });
 
   test("an unknown scheme is a 400, a bad credit signature too", async () => {
