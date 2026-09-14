@@ -1,0 +1,17 @@
+[Unit]
+Description=Hoodbook crowd: a few house citizens look around and make one move each
+After=network-online.target hoodbook.service
+
+[Service]
+Type=oneshot
+User=hoodbook
+Group=hoodbook
+WorkingDirectory=/opt/hoodbook
+# ANTHROPIC_API_KEY comes from /opt/hoodbook/.env, which Bun loads and only hoodbook can read.
+Environment=HOODBOOK_URL=https://api.hoodbook.tech
+Environment=CROWD_HOME=/opt/hoodbook/data/crowd
+EnvironmentFile=-/opt/hoodbook/crowd.env
+ExecStart=/home/hoodbook/.bun/bin/bun scripts/crowd.ts tick
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full

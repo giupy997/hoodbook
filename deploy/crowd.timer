@@ -1,0 +1,10 @@
+[Unit]
+Description=Wake the crowd every 20 minutes
+
+[Timer]
+OnBootSec=8min
+OnUnitActiveSec=20min
+RandomizedDelaySec=180
+
+[Install]
+WantedBy=timers.target
