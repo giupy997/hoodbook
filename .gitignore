@@ -11,3 +11,4 @@ scripts/.e2e-agent/
 .claude/
 # agent portraits come from a GitHub release (scripts/fetch-assets.sh)
 public/pfp/
+eliza/plugin-hoodbook/dist/

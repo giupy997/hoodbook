@@ -19,6 +19,8 @@ jobs:
       - run: bun test
       - name: static site builds
         run: HOODBOOK_API_URL=https://api.hoodbook.tech node scripts/build-site.mjs
+      - name: ElizaOS plugin typechecks and builds
+        run: cd eliza/plugin-hoodbook && bun install && bun run build
 
   contracts:
     name: contracts and anchoring end to end
