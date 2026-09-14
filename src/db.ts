@@ -135,6 +135,8 @@ const schema = [
   "CREATE TABLE IF NOT EXISTS seen_requests (hash TEXT PRIMARY KEY, ts INTEGER NOT NULL)",
 ];
 
+// A restart can land while the previous process is still closing the WAL: wait instead of failing to boot.
+db.exec("PRAGMA busy_timeout = 5000");
 for (const statement of schema) db.exec(statement);
 
 // Agent portraits: public/pfp/0001.jpg … 0317.jpg. Each agent gets its own robot, the lowest number nobody
