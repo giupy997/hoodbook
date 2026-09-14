@@ -11,6 +11,7 @@
 //
 // The rules, all overridable with MEMEAGENT_* env vars (see CFG):
 //   - buy at most MAX_ETH per launch, only Pons launches quoted in ETH, only while MIN_FDV_USD <= FDV < MAX_FDV_USD
+//     and the curve traded at least MIN_VOL5_USD in the last VOL_WINDOW_S seconds (volume is what it chases)
 //   - only after the snipe tax window and only if at least MIN_BUYERS other wallets put MIN_RAISED_ETH in
 //   - never the same token twice, never two tokens from the same deployer, at most MAX_POSITIONS open,
 //     MAX_BUYS_PER_HOUR buys, DAILY_BUDGET_ETH per day; keep GAS_FLOOR ETH untouched
@@ -41,12 +42,14 @@ const num = (name: string, fallback: number) => {
 export const CFG = {
   MAX_ETH: num("MAX_ETH", 0.01),               // per buy
   MAX_FDV_USD: num("MAX_FDV_USD", 50_000),     // never buy above this fully diluted value
-  MIN_FDV_USD: num("MIN_FDV_USD", 5_500),      // nor below it: a launch still at its starting price has proven nothing
+  MIN_FDV_USD: num("MIN_FDV_USD", 15_000),     // nor below it: a launch still near its starting price has proven nothing
+  MIN_VOL5_USD: num("MIN_VOL5_USD", 10_000),   // and the curve must have traded this much in the last 5 minutes
+  VOL_WINDOW_S: num("VOL_WINDOW_S", 300),      // the window for MIN_VOL5_USD
   TAKE_AT: num("TAKE_AT", 2),                  // multiple of the entry price at which the initial comes back
   TAKE_FRACTION: num("TAKE_FRACTION", 0.5),    // share of the bag sold at TAKE_AT
   FINAL_TAKE_AT: num("FINAL_TAKE_AT", 0),      // multiple at which the rest is sold; 0 = keep it
   MIN_AGE_S: num("MIN_AGE_S", 20),             // Pons' snipe tax is gone after 3 s; wait a little more
-  MAX_AGE_MIN: num("MAX_AGE_MIN", 15),         // older than this is not an initial any more
+  MAX_AGE_MIN: num("MAX_AGE_MIN", 60),         // launches older than this are no longer watched
   MIN_BUYERS: num("MIN_BUYERS", 4),            // distinct wallets other than the deployer
   MIN_RAISED_ETH: num("MIN_RAISED_ETH", 0.05), // ETH other wallets already put in
   MAX_POSITIONS: num("MAX_POSITIONS", 6),
@@ -216,31 +219,44 @@ async function newLaunches(state: State): Promise<Launch[]> {
 
 // Who is still in, other than the deployer, and how much ETH is net in the curve: snipers that bought in
 // the first block and dumped a minute later count for nothing, which is the whole point of the filter.
+// Also: the ETH that changed hands on the curve in the last VOL_WINDOW_S seconds (buys and sells, everyone),
+// which is the volume the strategy chases. Blocks are ~2 s apart, so the window is measured in blocks.
 async function demand(l: Launch) {
+  const latest = Number(await pub.getBlockNumber());
+  const windowFrom = latest - Math.ceil(CFG.VOL_WINDOW_S / 2);
   const logs = await pub.getLogs({ address: l.curve, fromBlock: BigInt(l.block), toBlock: "latest" });
   const flow = new Map<string, number>();
-  let raised = 0;
+  let raised = 0, volWindow = 0;
   for (const x of logs) {
     const isBuy = x.topics[0] === TOPIC_BUY, isSell = x.topics[0] === TOPIC_SELL;
     if ((!isBuy && !isSell) || x.topics.length < 2) continue;
     const who = ("0x" + x.topics[1]!.slice(26)).toLowerCase();
-    if (who === l.deployer.toLowerCase()) continue;
     // CurveBuy data: (ethIn, tokensOut, ...); CurveSell data: (tokensIn, ethOut, ...)
     const amount = Number(formatEther(BigInt("0x" + x.data.slice(isBuy ? 2 : 66, isBuy ? 66 : 130))));
+    if (Number(x.blockNumber ?? 0n) >= windowFrom) volWindow += amount;
+    if (who === l.deployer.toLowerCase()) continue;
     flow.set(who, (flow.get(who) ?? 0) + (isBuy ? amount : -amount));
     raised += isBuy ? amount : -amount;
   }
   const buyers = [...flow.values()].filter((net) => net > 0.001).length; // still holding something that cost real ETH
-  return { buyers, raised };
+  return { buyers, raised, volWindow };
 }
 
-type Verdict = { ok: boolean; why: string; symbol?: string; fdvUsd?: number; price?: number; buyers?: number; raised?: number };
+type Verdict = { ok: boolean; why: string; symbol?: string; fdvUsd?: number; price?: number; buyers?: number; raised?: number; volWindow?: number; volUsd?: number };
 async function judge(l: Launch, state: State, me: Address): Promise<Verdict> {
   const age = (Date.now() - l.at) / 1000;
   if (age < CFG.MIN_AGE_S) return { ok: false, why: "too young" };
   if (age > CFG.MAX_AGE_MIN * 60) return { ok: false, why: "too old" };
   if (state.positions.some((p) => p.token.toLowerCase() === l.token.toLowerCase())) return { ok: false, why: "already hold it" };
   if (state.positions.some((p) => p.deployer.toLowerCase() === l.deployer.toLowerCase())) return { ok: false, why: "same deployer as a bag I hold" };
+  // Cheapest check first: one eth_call for the price. Most launches never leave their starting FDV, and
+  // reading their whole log history every pass would drown the public RPC.
+  const spot = await curvePrice(l.curve).catch(() => null);
+  if (!spot) return { ok: false, why: "no reserves" };
+  const price = await ethUsd(state);
+  const fdvUsd = spot.fdvEth * price;
+  if (fdvUsd >= CFG.MAX_FDV_USD) return { ok: false, why: `fdv ${usd(fdvUsd)} above cap`, fdvUsd };
+  if (fdvUsd < CFG.MIN_FDV_USD) return { ok: false, why: `demand fdv ${usd(fdvUsd)} below floor`, fdvUsd }; // "demand": keep watching, it may still grow
   const [tokenOfCurve, graduated] = await Promise.all([
     pub.readContract({ address: l.curve, abi: CURVE, functionName: "token" }),
     pub.readContract({ address: l.curve, abi: CURVE, functionName: "graduated" }).catch(() => true),
@@ -248,15 +264,12 @@ async function judge(l: Launch, state: State, me: Address): Promise<Verdict> {
   if (tokenOfCurve.toLowerCase() !== l.token.toLowerCase()) return { ok: false, why: "curve/token mismatch" };
   if (graduated) return { ok: false, why: "already graduated" };
   const d = await demand(l);
-  if (d.buyers < CFG.MIN_BUYERS || d.raised < CFG.MIN_RAISED_ETH) return { ok: false, why: `demand ${d.buyers} buyers / ${eth(d.raised)} ETH`, ...d };
-  const spot = await curvePrice(l.curve);
-  if (!spot) return { ok: false, why: "no reserves" };
-  const fdvUsd = spot.fdvEth * (await ethUsd(state));
-  if (fdvUsd >= CFG.MAX_FDV_USD) return { ok: false, why: `fdv ${usd(fdvUsd)} above cap`, fdvUsd, ...d };
-  if (fdvUsd < CFG.MIN_FDV_USD) return { ok: false, why: `demand fdv ${usd(fdvUsd)} below floor`, fdvUsd, ...d }; // "demand": keep watching, it may still grow
+  const volUsd = d.volWindow * price;
+  if (d.buyers < CFG.MIN_BUYERS || d.raised < CFG.MIN_RAISED_ETH) return { ok: false, why: `demand ${d.buyers} buyers / ${eth(d.raised)} ETH`, fdvUsd, volUsd, ...d };
+  if (volUsd < CFG.MIN_VOL5_USD) return { ok: false, why: `demand volume ${usd(volUsd)} in ${CFG.VOL_WINDOW_S}s below ${usd(CFG.MIN_VOL5_USD)}`, fdvUsd, volUsd, ...d };
   const symbol = cleanSymbol(await pub.readContract({ address: l.token, abi: ERC20, functionName: "symbol" }).catch(() => "TOKEN"));
   void me;
-  return { ok: true, why: "fits", symbol, fdvUsd, price: spot.price, ...d };
+  return { ok: true, why: "fits", symbol, fdvUsd, volUsd, price: spot.price, ...d };
 }
 
 // ---------- the rules that gate every buy ----------
@@ -291,12 +304,12 @@ async function buy(l: Launch, v: Verdict, state: State, acc: PrivateKeyAccount) 
   state.positions.push(position);
   state.buys.push({ at: Date.now(), eth: ethIn });
   writeState(state);
-  const note = `Initial on ${v.symbol}: ${eth(ethIn)} ETH at ${usd(v.fdvUsd!)} FDV, ${v.buyers} wallets in before me. Rule: initial back at ${CFG.TAKE_AT}x, keep the rest. Not advice.`;
+  const note = `${v.symbol}: ${eth(ethIn)} ETH at ${usd(v.fdvUsd!)} FDV, ${usd(v.volUsd!)} traded in ${Math.round(CFG.VOL_WINDOW_S / 60)} min, ${v.buyers} wallets in. Rule: half out at ${CFG.TAKE_AT}x, all out at -${Math.round((1 - CFG.STOP_LOSS) * 100)}% or after ${CFG.MAX_HOLD_MIN} min. Not advice.`;
   await share(hash, note);
   await post(`Bought ${v.symbol} at ${usd(v.fdvUsd!)} FDV`, [
     `token     ${l.token}`,
     `launch    Pons curve, ${Math.round((Date.now() - l.at) / 60000)} min old`,
-    `demand    ${v.buyers} wallets, ${eth(v.raised!)} ETH in before me`,
+    `demand    ${v.buyers} wallets, ${eth(v.raised!)} ETH in before me, ${usd(v.volUsd!)} traded in the last ${Math.round(CFG.VOL_WINDOW_S / 60)} min`,
     `size      ${eth(ethIn)} ETH, max ${CFG.MAX_ETH}`,
     `rule      sell half at ${CFG.TAKE_AT}x so the initial comes back, keep the rest`,
     `tx        ${EXPLORER}/tx/${hash}`,
@@ -442,7 +455,7 @@ async function pass(state: State, acc: PrivateKeyAccount, dry: boolean) {
       continue;
     }
     const blocked = dry ? null : await canBuy(state, acc.address);
-    log(`${dry ? "would buy" : blocked ? "fits but blocked" : "buying"} ${v.symbol} fdv ${usd(v.fdvUsd!)} holders ${v.buyers} net ${eth(v.raised!)} ETH age ${Math.round((Date.now() - l.at) / 1000)}s curve ${l.curve}${blocked ? ` (${blocked})` : ""}`);
+    log(`${dry ? "would buy" : blocked ? "fits but blocked" : "buying"} ${v.symbol} fdv ${usd(v.fdvUsd!)} vol5m ${usd(v.volUsd!)} holders ${v.buyers} net ${eth(v.raised!)} ETH age ${Math.round((Date.now() - l.at) / 1000)}s curve ${l.curve}${blocked ? ` (${blocked})` : ""}`);
     pending.splice(i--, 1);
     if (dry || blocked) continue;
     try {
