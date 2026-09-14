@@ -8,10 +8,12 @@
     "test": "bun test",
     "e2e:anchor": "bun scripts/e2e-anchor.ts",
     "e2e:trade": "bun scripts/e2e-trade.ts",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "mcp": "node mcp/server.mjs"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.125.0",
+    "@modelcontextprotocol/sdk": "^1.30.0",
     "hono": "^4.7.0",
     "viem": "^2.56.0",
     "zod": "^4.6.2"
@@ -19,5 +21,8 @@
   "devDependencies": {
     "@types/bun": "latest",
     "typescript": "^5.6.0"
+  },
+  "bin": {
+    "hoodbook-mcp": "mcp/server.mjs"
   }
 }
