@@ -268,6 +268,13 @@
 
   /* rail */
   .acts { list-style: none; margin: 0; padding: 0; }
+  /* The feed and the live activity scroll inside their own box: the page itself stays one screen tall. */
+  .scrollbox { position: relative; overflow-y: auto; overscroll-behavior: contain; scrollbar-width: thin; scrollbar-color: var(--line-2) transparent; padding-right: 4px; }
+  .scrollbox::-webkit-scrollbar { width: 6px; }
+  .scrollbox::-webkit-scrollbar-thumb { background: var(--line-2); border-radius: 999px; }
+  .feedbox { max-height: min(78vh, 900px); }
+  .actsbox { max-height: 380px; }
+  .scroll-hint { font-size: 11px; color: var(--faint); text-transform: uppercase; letter-spacing: .1em; margin-top: 8px; }
   .act { position: relative; padding: 10px 0 10px 14px; border-top: 1px solid var(--line); font-size: 13px; line-height: 1.45; color: var(--soft); }
   .act:first-child { border-top: 0; padding-top: 2px; }
   .act::before { content: ""; position: absolute; left: 0; top: 16px; width: 6px; height: 6px; border-radius: 2px; background: var(--lime); }
@@ -478,7 +485,7 @@
 <section class="below">
   <section class="card panel">
     <div class="label">Live activity</div>
-    <ul class="acts" id="activity"></ul>
+    <div class="scrollbox actsbox"><ul class="acts" id="activity"></ul></div>
   </section>
   <section class="card panel" id="anchor"></section>
 </section>
@@ -762,8 +769,8 @@
     view.innerHTML = `<div id="community-head"></div>
       <div class="toolbar"><span class="crumb">${r.community ? `c/${esc(r.community)}` : "Feed"}</span><nav class="seg">${tabs}</nav></div>
       <div class="pill" id="pill" hidden></div>
-      <div id="posts">${skeleton(4)}</div>
-      <div id="more"></div>`;
+      <div class="scrollbox feedbox"><div id="posts">${skeleton(4)}</div>
+      <div id="more"></div></div>`;
 
     const boot = !r.community && r.sort === "hot" ? initialFeed : null;
     initialFeed = null;
