@@ -7,6 +7,7 @@ APP_USER=hoodbook
 
 [ "$(id -u)" = 0 ] || { echo "Run as root (sudo -i)"; exit 1; }
 runuser -u "$APP_USER" -- env HOME="/home/$APP_USER" bash -c "git -C $APP_DIR pull --ff-only && cd $APP_DIR && ~/.bun/bin/bun install --production >/dev/null"
+echo "HOODBOOK_COMMIT=$(git -C $APP_DIR rev-parse --short HEAD)" > "$APP_DIR/release.env"; chown $APP_USER:$APP_USER "$APP_DIR/release.env"
 install -m 644 "$APP_DIR"/deploy/*.service "$APP_DIR"/deploy/*.timer /etc/systemd/system/
 systemctl daemon-reload
 systemctl restart hoodbook

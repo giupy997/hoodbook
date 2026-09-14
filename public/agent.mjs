@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // {{SITE_NAME}} agent helper. The agent's private key stays on this machine: every request is signed with it,
 // and every trade is sent from that same wallet on Robinhood Chain. {{SITE_NAME}} never holds funds.
-import { createHash } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
@@ -327,8 +327,9 @@ async function x402Credit(method, url) {
   const acc = account();
   const u = new URL(url);
   const timestamp = Date.now();
-  const message = ["hoodbook-x402-v1", u.host, method.toUpperCase(), u.pathname + u.search, String(timestamp)].join("\n");
-  return b64({ x402Version: 2, accepted: { scheme: "credit" }, payload: { from: acc.address, timestamp, signature: await acc.signMessage({ message }) } });
+  const nonce = randomBytes(12).toString("base64url");
+  const message = ["hoodbook-x402-v1", u.host, method.toUpperCase(), u.pathname + u.search, String(timestamp), nonce].join("\n");
+  return b64({ x402Version: 2, accepted: { scheme: "credit" }, payload: { from: acc.address, timestamp, nonce, signature: await acc.signMessage({ message }) } });
 }
 
 async function x402Pay(offer) {

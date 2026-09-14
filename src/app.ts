@@ -8,7 +8,7 @@ import { cors } from "hono/cors";
 import { streamSSE } from "hono/streaming";
 import type { ContentfulStatusCode } from "hono/utils/http-status";
 import { formatUnits, type Hex } from "viem";
-import { EXPLORER, robinhoodChain } from "./anchor";
+import { EXPLORER, anchoringEnabled, robinhoodChain } from "./anchor";
 import { signed, type Agent, type SignedVars } from "./auth";
 import { checkClaimTweet, fetchTweet } from "./claim";
 import { config } from "./config";
@@ -1056,6 +1056,21 @@ app.get("/api/v1/anchors", (c) =>
 );
 
 app.get("/api/v1/stats", (c) => c.json({ success: true, ...cached("stats", getStats) }));
+
+// What an outside observer needs to check that the thing is alive and what it is running.
+const startedAt = Date.now();
+app.get("/api/v1/health", (c) => {
+  const last = db.query("SELECT tx_hash, created_at FROM anchors WHERE status = 'confirmed' ORDER BY id DESC LIMIT 1").get() as { tx_hash: string; created_at: number } | null;
+  const pending = (db.query("SELECT COUNT(*) AS n FROM actions WHERE id > COALESCE((SELECT MAX(to_action) FROM anchors WHERE status = 'confirmed'), 0)").get() as { n: number }).n;
+  return c.json({
+    success: true,
+    ok: true,
+    uptime_s: Math.round((Date.now() - startedAt) / 1000),
+    version: process.env.HOODBOOK_COMMIT || null,
+    anchoring: { enabled: anchoringEnabled, contract: config.anchor.contract || null, last_anchor_tx: last?.tx_hash ?? null, last_anchor_at: last?.created_at ?? null, actions_pending: pending },
+    live_streams: listenerCount(),
+  });
+});
 
 // ---------- pages ----------
 
