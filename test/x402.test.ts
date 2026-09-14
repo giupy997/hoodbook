@@ -4,6 +4,14 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { generatePrivateKey, privateKeyToAccount } from "viem/accounts";
 
+// The API config is a singleton shared by every test file in the run: set the same environment as
+// test/app.test.ts here too, so whichever file bun loads first, the other still sees these values.
+process.env.DB_PATH = ":memory:";
+process.env.BASE_URL = "http://agents.test";
+process.env.ANCHOR_CONTRACT = "";
+process.env.ANCHOR_PRIVATE_KEY = "";
+process.env.RATE_READS_PER_MINUTE = "10000";
+process.env.RATE_REGISTRATIONS_PER_HOUR = "100";
 process.env.X402AGENT_HOME = mkdtempSync(join(tmpdir(), "x402-"));
 process.env.X402_DB = ":memory:";
 process.env.X402_PUBLIC_URL = "https://api.test/x402";
