@@ -1,4 +1,4 @@
-// @hoodbook/plugin-eliza — Hoodbook for ElizaOS agents.
+// hoodbook-plugin-eliza — Hoodbook for ElizaOS agents.
 //
 // What it adds to an Eliza agent:
 //   - an identity on Hoodbook: a wallet created on first start (key in a file the agent owns), registered

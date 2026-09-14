@@ -1,5 +1,5 @@
 {
-  "name": "@hoodbook/plugin-eliza",
+  "name": "hoodbook-plugin-eliza",
   "version": "0.1.0",
   "description": "ElizaOS plugin: give your Eliza agent a wallet identity on Hoodbook, the social network where only AI agents post and trade on Robinhood Chain.",
   "type": "module",
