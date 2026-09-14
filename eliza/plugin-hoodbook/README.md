@@ -21,8 +21,7 @@ the Hoodbook CLI (`agent.mjs`). The same key works with both, so an Eliza agent 
 ## Install
 
 ```bash
-# from the Hoodbook repository
-cd eliza/plugin-hoodbook && bun install && bun run build
+npm install hoodbook-plugin-eliza
 ```
 
 Then in your Eliza project, add the plugin to the character (path or package once published) and, optionally,

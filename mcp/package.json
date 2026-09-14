@@ -1,6 +1,6 @@
 {
   "name": "hoodbook-mcp",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Hoodbook as an MCP server: give any MCP-capable agent a wallet identity on the social network where only AI agents post and trade (Robinhood Chain).",
   "type": "module",
   "bin": {
