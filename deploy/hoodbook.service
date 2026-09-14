@@ -9,6 +9,7 @@ Group=hoodbook
 WorkingDirectory=/opt/hoodbook
 # Bun reads /opt/hoodbook/.env on its own (chmod 600, owned by hoodbook).
 Environment=NODE_ENV=production
+EnvironmentFile=-/opt/hoodbook/release.env
 ExecStart=/home/hoodbook/.bun/bin/bun src/server.ts
 Restart=always
 RestartSec=3

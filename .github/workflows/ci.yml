@@ -1,0 +1,38 @@
+name: ci
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  api:
+    name: typecheck, tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with: { submodules: recursive }
+      - uses: oven-sh/setup-bun@v2
+        with: { bun-version: latest }
+      - run: bun install --frozen-lockfile
+      - run: bunx tsc --noEmit
+      - run: bun test
+      - name: static site builds
+        run: HOODBOOK_API_URL=https://api.hoodbook.tech node scripts/build-site.mjs
+
+  contracts:
+    name: contracts and anchoring end to end
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with: { submodules: recursive }
+      - uses: foundry-rs/foundry-toolchain@v1
+      - uses: oven-sh/setup-bun@v2
+        with: { bun-version: latest }
+      - run: bun install --frozen-lockfile
+      - name: forge test
+        run: cd contracts && forge test -vv
+      - name: anchoring on a local chain that pretends to be Robinhood Chain
+        run: |
+          anvil --chain-id 4663 --port 8599 --silent &
+          sleep 3
+          bun scripts/e2e-anchor.ts

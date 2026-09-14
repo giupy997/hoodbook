@@ -140,7 +140,7 @@ async function accepts(payTo: string, usd: number) {
   return [
     { scheme: "exact-tx", network: NETWORK, amount: wei.toString(), asset: ZERO, payTo, maxTimeoutSeconds: 600, extra: { name: "ETH", usd, how: "Send at least `amount` wei to payTo on Robinhood Chain, then retry with payload {\"txHash\"}. Anything above the price becomes credit." } },
     { scheme: "exact-tx", network: NETWORK, amount: String(Math.ceil(usd * 1e6)), asset: USDG, payTo, maxTimeoutSeconds: 600, extra: { name: "USDG", decimals: 6, usd, how: "Transfer at least `amount` USDG (6 decimals) to payTo, then retry with payload {\"txHash\"}." } },
-    { scheme: "credit", network: NETWORK, amount: String(Math.ceil(usd * 1e6)), asset: "USD", payTo, maxTimeoutSeconds: 60, extra: { usd, how: `Top up once (POST ${PUBLIC_URL}/topup with an exact-tx payment), then sign "${SIGN_PREFIX}\\n<host>\\n<METHOD>\\n<path>\\n<unix ms>" with EIP-191 and send payload {"from","timestamp","signature"}.`, balance: `${PUBLIC_URL}/credit/<address>` } },
+    { scheme: "credit", network: NETWORK, amount: String(Math.ceil(usd * 1e6)), asset: "USD", payTo, maxTimeoutSeconds: 60, extra: { usd, how: `Top up once (POST ${PUBLIC_URL}/topup with an exact-tx payment), then sign "${SIGN_PREFIX}\\n<host>\\n<METHOD>\\n<path>\\n<unix ms>\\n<random nonce>" with EIP-191 and send payload {"from","timestamp","nonce","signature"}.`, balance: `${PUBLIC_URL}/credit/<address>` } },
   ];
 }
 
@@ -162,14 +162,15 @@ export function buildApp(acc: PrivateKeyAccount) {
     const scheme = env.accepted?.scheme ?? env.scheme;
     const payload = env.payload ?? {};
     if (scheme === "credit") {
-      const { from, timestamp, signature } = payload;
-      if (!isAddress(from ?? "") || !/^\d+$/.test(String(timestamp ?? "")) || typeof signature !== "string") throw new PayError(400, "bad_payload", "credit payload needs from, timestamp, signature");
+      const { from, timestamp, nonce, signature } = payload;
+      if (!isAddress(from ?? "") || !/^\d+$/.test(String(timestamp ?? "")) || typeof signature !== "string") throw new PayError(400, "bad_payload", "credit payload needs from, timestamp, nonce, signature");
+      if (!/^[A-Za-z0-9_-]{8,64}$/.test(String(nonce ?? ""))) throw new PayError(400, "bad_payload", "nonce must be 8-64 characters of [A-Za-z0-9_-], random per request");
       if (Math.abs(Date.now() - Number(timestamp)) > 60_000) throw new PayError(400, "stale_timestamp", "timestamp must be within 60 seconds of now");
       const url = new URL(c.req.url);
-      const message = [SIGN_PREFIX, c.req.header("host") ?? url.host, c.req.method.toUpperCase(), url.pathname + url.search, String(timestamp)].join("\n");
+      const message = [SIGN_PREFIX, c.req.header("host") ?? url.host, c.req.method.toUpperCase(), url.pathname + url.search, String(timestamp), String(nonce)].join("\n");
       const signer = await recoverMessageAddress({ message, signature: signature as Hex }).catch(() => null);
       if (!signer || signer.toLowerCase() !== from.toLowerCase()) throw new PayError(400, "bad_signature", "signature does not match from");
-      const key = `${from.toLowerCase()}:${timestamp}`;
+      const key = `${from.toLowerCase()}:${nonce}`;
       if (db().query("SELECT 1 FROM seen WHERE key = ?").get(key)) throw new PayError(400, "replayed", "that signature was already used");
       db().query("INSERT INTO seen (key, at) VALUES (?, ?)").run(key, Date.now());
       const balance = creditOf(from);

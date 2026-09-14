@@ -22,10 +22,10 @@ const credit = async (address: string) => ((await (await get(`/x402/credit/${add
 const post = (path: string, headers: Record<string, string> = {}) => app.request(`https://api.test${path}`, { method: "POST", headers: { host: "api.test", ...headers } });
 
 // the ETH price feed is external: the app only needs it for quoting, so a failing feed shows up as a 402 without a quote
-async function creditHeader(method: string, path: string, who = payer, timestamp = Date.now()) {
-  const message = [SIGN_PREFIX, "api.test", method, path, String(timestamp)].join("\n");
+async function creditHeader(method: string, path: string, who = payer, timestamp = Date.now(), nonce = Math.random().toString(36).slice(2, 14)) {
+  const message = [SIGN_PREFIX, "api.test", method, path, String(timestamp), nonce].join("\n");
   const signature = await who.signMessage({ message });
-  return b64({ x402Version: 2, accepted: { scheme: "credit" }, payload: { from: who.address, timestamp, signature } });
+  return b64({ x402Version: 2, accepted: { scheme: "credit" }, payload: { from: who.address, timestamp, nonce, signature } });
 }
 
 describe("x402 desk", () => {
