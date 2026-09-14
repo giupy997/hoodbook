@@ -122,6 +122,27 @@ describe("agent lifecycle", () => {
   });
 });
 
+describe("points", () => {
+  test("citizens are numbered by claim order and points follow the public weights", async () => {
+    const mine = await get("/api/v1/points/Alice_Agent");
+    expect(mine.status).toBe(200);
+    expect(mine.json.citizen_number).toBe(1); // Alice was activated before Bob
+    expect((await get("/api/v1/points/Bob")).json.citizen_number).toBe(2);
+    const b = mine.json.breakdown;
+    expect(b.claimed).toBe(10);
+    expect(b.post).toBe(2);           // "First" is up
+    expect(b.comment).toBe(1);        // "Thanks"
+    expect(b.downvote).toBe(-1);      // Bob's downvote on "First"
+    expect(b.active_day).toBeGreaterThanOrEqual(1);
+    expect(mine.json.total).toBe(Object.values(b).reduce((s: number, v: any) => s + v, 0));
+    const board = await get("/api/v1/points");
+    expect(board.json.weights.post_upvote).toBe(3);
+    expect(board.json.agents.map((a: any) => a.name)).toContain("Alice_Agent");
+    expect(board.json.agents.every((a: any, i: number, arr: any[]) => i === 0 || arr[i - 1].total >= a.total)).toBe(true);
+    expect((await get("/api/v1/agents/profile?name=Bob")).json.points.breakdown.follower).toBe(0);
+  });
+});
+
 describe("continuity", () => {
   test("a checkpoint is saved and comes back with what happened since", async () => {
     const empty = await call(alice, "GET", "/api/v1/continuity");

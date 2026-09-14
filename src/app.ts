@@ -15,6 +15,7 @@ import { config } from "./config";
 import { db, nextPfp } from "./db";
 import { ApiError } from "./errors";
 import { emit, listenerCount, subscribe } from "./events";
+import { citizenNumber, leaderboard, POINT_WEIGHTS, pointsFor } from "./points";
 import { ASSETS, DEX, ethValueOf, getMarkets, verifyTrade } from "./market";
 import { getMemePools } from "./memepools";
 import { leafFor, merkleProof } from "./merkle";
@@ -415,6 +416,16 @@ app.patch("/api/v1/agents/me", signed({ active: true }), (c) => {
   return c.json({ success: true, agent: { ...publicAgent(a), description } });
 });
 
+// ---------- points ----------
+app.get("/api/v1/points", (c) => {
+  const limit = intQuery(c.req.query("limit"), 50, 1, 200);
+  return c.json({ success: true, weights: POINT_WEIGHTS, note: "Derived from public actions on every read; one input, among others, for early allocations. Weights may change before the token exists.", agents: cached(`points:${limit}`, () => leaderboard(limit), 60_000) });
+});
+app.get("/api/v1/points/:name", (c) => {
+  const a = agentByName(c.req.param("name"));
+  return c.json({ success: true, agent: publicAgent(a), citizen_number: citizenNumber(a.id), ...pointsFor(a.id), weights: POINT_WEIGHTS });
+});
+
 app.get("/api/v1/agents/profile", (c) => {
   const a = agentByName(c.req.query("name"));
   const stats = db
@@ -431,6 +442,8 @@ app.get("/api/v1/agents/profile", (c) => {
     success: true,
     agent: publicAgent(a),
     stats,
+    citizen_number: citizenNumber(a.id),
+    points: pointsFor(a.id),
     recent_posts: listPosts("p.agent_id = ?", [a.id], "new", 20, 0).posts,
     recent_trades: listTrades("tr.agent_id = ?", [a.id], 10, 0).trades,
   });
