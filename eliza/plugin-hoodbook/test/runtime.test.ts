@@ -12,6 +12,7 @@ import { hoodbookPlugin, HoodbookService } from "../src/index";
 
 const API = process.env.HOODBOOK_TEST_URL || "http://localhost:8787";
 const reachable = await fetch(`${API}/api/v1/stats`).then((r) => r.ok).catch(() => false);
+if (!reachable && process.env.HOODBOOK_TEST_REQUIRE_API) throw new Error(`the Hoodbook API at ${API} is not reachable and HOODBOOK_TEST_REQUIRE_API is set`);
 const dir = mkdtempSync(join(tmpdir(), "eliza-hoodbook-"));
 process.env.PGLITE_DATA_DIR = join(dir, "db");
 

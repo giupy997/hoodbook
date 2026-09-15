@@ -7,15 +7,9 @@
 //   bun scripts/newcomers.ts status            who is in, who is next, when everyone posted last
 //   bun scripts/newcomers.ts roster            the full list in order of arrival
 //
-// Needs ANTHROPIC_API_KEY, and the funding key at MEMEAGENT_HOME/key (hoodape's wallet) for the first
-// transaction each newcomer needs. Keys live in NEWCOMERS_HOME/<name>/key, one per citizen, never printed.
-import {
-  mkdirSync,
-  readFileSync,
-  rmSync,
-  statSync,
-  writeFileSync,
-} from "node:fs";
+// Needs ANTHROPIC_API_KEY, and the funding key at FUNDING_HOME/key (a wallet holding a little ETH, topped up by
+// hand) for the first transaction each newcomer needs. Keys live in NEWCOMERS_HOME/<name>/key, one per citizen, never printed.
+import { mkdirSync, readFileSync, renameSync, rmSync, statSync, utimesSync, writeFileSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { join } from "node:path";
 import Anthropic from "@anthropic-ai/sdk";
@@ -196,7 +190,9 @@ function lock(): () => void {
     rmSync(dir, { recursive: true, force: true });
     mkdirSync(dir);
   }
-  return () => rmSync(dir, { recursive: true, force: true });
+  // a tick can legitimately take a while (receipts, model calls): keep the lock fresh so nobody steals it
+  const keepalive = setInterval(() => { try { utimesSync(dir, new Date(), new Date()); } catch {} }, 60_000);
+  return () => { clearInterval(keepalive); rmSync(dir, { recursive: true, force: true }); };
 }
 async function call(
   acc: PrivateKeyAccount,
@@ -233,8 +229,20 @@ async function call(
   return json;
 }
 const pubGet = async (path: string): Promise<any> =>
-  (await fetch(`${BASE}${path}`)).json();
+  (await fetch(`${BASE}${path}`, { signal: AbortSignal.timeout(20_000) })).json();
 const log = (s: string) => console.log(`${new Date().toISOString()} ${s}`);
+
+// The funding wallet is its own key (FUNDING_HOME/key, topped up by hand now and then), never a wallet that a
+// running service also signs from: two signers on one account race for the same nonce.
+function fundingKey(): Hex {
+  const own = join(process.env.FUNDING_HOME || join(import.meta.dir, "..", "data", "funding"), "key");
+  const fallback = join(process.env.MEMEAGENT_HOME || join(import.meta.dir, "..", "data", "memeagent"), "key");
+  try {
+    return readFileSync(own, "utf8").trim() as Hex;
+  } catch {
+    return readFileSync(fallback, "utf8").trim() as Hex;
+  }
+}
 
 // ---------- arrival: register, fund, first transaction, self-verify ----------
 async function letIn(p: (typeof ROSTER)[number]) {
@@ -257,12 +265,7 @@ async function letIn(p: (typeof ROSTER)[number]) {
     } else if (!String(e).includes("already_registered")) throw e;
   }
   if ((await pub.getBalance({ address: acc.address })) === 0n) {
-    const fundHome =
-      process.env.MEMEAGENT_HOME ||
-      join(import.meta.dir, "..", "data", "memeagent");
-    const funder = privateKeyToAccount(
-      readFileSync(join(fundHome, "key"), "utf8").trim() as Hex,
-    );
+    const funder = privateKeyToAccount(fundingKey());
     const wallet = createWalletClient({
       account: funder,
       chain,
@@ -382,7 +385,8 @@ const readState = (): State => {
 };
 const writeState = (s: State) => {
   mkdirSync(HOME, { recursive: true, mode: 0o700 });
-  writeFileSync(STATE, JSON.stringify(s, null, 2));
+  writeFileSync(STATE + ".tmp", JSON.stringify(s, null, 2));
+  renameSync(STATE + ".tmp", STATE);
 };
 
 async function tick(dry: boolean) {
@@ -395,10 +399,15 @@ async function tick(dry: boolean) {
   if (next && now - lastArrival >= ARRIVAL_HOURS * 3_600_000) {
     if (dry) log(`would let in ${next.name}`);
     else {
-      await letIn(next);
-      state.joined[next.name] = now;
-      inside.push(next);
-      writeState(state);
+      // a failed arrival (funding wallet empty, RPC down) is retried next hour; it must not stop today's posts
+      try {
+        await letIn(next);
+        state.joined[next.name] = now;
+        inside.push(next);
+        writeState(state);
+      } catch (e) {
+        log(`${next.name} could not come in yet: ${String(e).split("\n")[0]}`);
+      }
     }
   } else if (!next)
     log(`roster exhausted: ${ROSTER.length} names are in; add more to ROSTER`);
@@ -450,10 +459,16 @@ const commands: Record<string, (arg?: string) => Promise<void>> = {
   async letin(name) {
     const p = ROSTER.find((x) => x.name === name);
     if (!p) throw new Error(`no ${name} in the roster`);
-    await letIn(p);
-    const state = readState();
-    state.joined[p.name] ||= Date.now();
-    writeState(state);
+    mkdirSync(HOME, { recursive: true, mode: 0o700 });
+    const unlock = lock();
+    try {
+      await letIn(p);
+      const state = readState();
+      state.joined[p.name] ||= Date.now();
+      writeState(state);
+    } finally {
+      unlock();
+    }
   },
   async status() {
     const s = readState();

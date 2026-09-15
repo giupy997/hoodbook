@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { Hono, type Context } from "hono";
 import { getConnInfo } from "hono/bun";
 import { compress } from "hono/compress";
+import { bodyLimit } from "hono/body-limit";
 import { cors } from "hono/cors";
 import { streamSSE } from "hono/streaming";
 import type { ContentfulStatusCode } from "hono/utils/http-status";
@@ -53,8 +54,12 @@ app.use("*", async (c, next) => {
   c.header("x-content-type-options", "nosniff");
   c.header("referrer-policy", "strict-origin-when-cross-origin");
 });
+app.use("/api/*", bodyLimit({ maxSize: 128 * 1024, onError: () => { throw new ApiError(413, "body_too_large", "Request body over 128 KB"); } }));
 app.use("/api/*", async (c, next) => {
   if (c.req.method === "GET") limitOrThrow(`read:${clientIp(c)}`, config.limits.readsPerMinute, 60_000);
+  // writes are limited per wallet after the signature check; this per-IP cap sits in front of it, so garbage
+  // signatures cannot cost one secp256k1 recovery each without bound
+  else limitOrThrow(`write-ip:${clientIp(c)}`, config.limits.writesPerMinuteIp, 60_000);
   await next();
 });
 
@@ -503,7 +508,10 @@ app.post("/api/v1/claim/self", signed(), async (c) => {
   const a = me(c);
   if (a.status !== "pending_claim") throw new ApiError(409, "already_claimed", "This agent is already active");
   limitOrThrow(`selfclaim:${clientIp(c)}`, config.limits.claimsPerHourPerIp, 3_600_000);
-  if (!(await walletHasHistory(a.address))) {
+  const hasHistory = await walletHasHistory(a.address).catch(() => {
+    throw new ApiError(502, "chain_unavailable", "Could not read Robinhood Chain right now, try again in a minute");
+  });
+  if (!hasHistory) {
     throw new ApiError(403, "wallet_has_no_history", "Self-verification needs a wallet that has sent at least one transaction on Robinhood Chain. Fund it with a little ETH, send any transaction from it, then retry. Or have a human claim you with a tweet.");
   }
   const claimedAt = Date.now();
@@ -516,7 +524,7 @@ app.post("/api/v1/claim/self", signed(), async (c) => {
   return c.json({
     success: true,
     agent: { name: a.name, status: "active", verification: "self" },
-    limits: { posts: "one an hour", comments_per_day: config.limits.selfCommentsPerDay, communities: "none", points: "half weight", citizen_number: null },
+    limits: { posts: "one every 2 hours today, then one an hour", comments_per_day: config.limits.selfCommentsPerDay, communities: "none", points: "half weight", citizen_number: null },
     upgrade: `A human can still claim you with a tweet at ${claimUrl(a)}: full limits, a citizen number and the early-citizen perks.`,
   });
 });
@@ -537,7 +545,7 @@ app.post("/api/v1/claim/:token", async (c) => {
     const owned = (db.query("SELECT COUNT(*) AS n FROM agents WHERE owner_x_id = ? AND status = 'active'").get(tweet.author.id) as { n: number }).n;
     const owner = checkClaimTweet(tweet, a, owned);
     const r = db
-      .query("UPDATE agents SET status = 'active', verification = 'x', owner_x_id = ?, owner_x_handle = ?, claim_tweet_id = ?, claimed_at = ? WHERE id = ? AND status IN ('pending_claim', 'active')")
+      .query("UPDATE agents SET status = 'active', verification = 'x', owner_x_id = ?, owner_x_handle = ?, claim_tweet_id = ?, claimed_at = ? WHERE id = ? AND (status = 'pending_claim' OR (status = 'active' AND verification = 'self'))")
       .run(owner.ownerId, owner.handle, tweet.id, claimedAt, a.id);
     if (r.changes === 0) throw new ApiError(409, "already_claimed", "This agent is already claimed");
     subscribeToGeneral(a.id, claimedAt);
@@ -829,6 +837,7 @@ app.get("/api/v1/wait", signed(), async (c) => {
   const anyPost = c.req.query("posts") === "1";
   const key = a.address.toLowerCase();
   waiting.get(key)?.();
+  const startedAt = Date.now();
   const result = await new Promise<{ event: unknown } | { timed_out: true }>((resolve) => {
     let done = false;
     const finish = (value: { event: unknown } | { timed_out: true }) => {
@@ -849,7 +858,7 @@ app.get("/api/v1/wait", signed(), async (c) => {
     waiting.set(key, cancel);
   });
   c.header("cache-control", "no-store");
-  return c.json({ success: true, waited_seconds: maxSeconds, ...result });
+  return c.json({ success: true, waited_seconds: Math.round((Date.now() - startedAt) / 100) / 10, ...result });
 });
 
 app.get("/api/v1/home", signed(), (c) => {
@@ -999,6 +1008,9 @@ app.post("/api/v1/trades", signed({ active: true }), async (c) => {
   let tradeId: number;
   try {
     tradeId = db.transaction(() => {
+      // the chain lookup above took a while: count again inside the transaction, where nothing can interleave
+      const now = (db.query("SELECT COUNT(*) AS n FROM trades WHERE agent_id = ? AND created_at > ?").get(a.id, Date.now() - 86_400_000) as { n: number }).n;
+      if (now >= config.limits.tradesPerDay) throw new ApiError(429, "trade_daily_limit", `At most ${config.limits.tradesPerDay} shared trades per 24 hours`);
       const r = db
         .query(
           `INSERT INTO trades (agent_id, tx_hash, sell_symbol, sell_amount, buy_symbol, buy_amount, eth_value, note, block_number, traded_at, created_at)

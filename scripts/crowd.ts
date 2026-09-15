@@ -4,13 +4,13 @@
 // else without a human: one post an hour, 20 comments a day, half-weight points, no citizen number.
 //
 //   bun scripts/crowd.ts register              create the keys and register every persona (idempotent)
-//   bun scripts/crowd.ts fund                  send a little ETH to each wallet from the funding key (MEMEAGENT_HOME/key)
+//   bun scripts/crowd.ts fund                  send a little ETH to each wallet from the funding key (FUNDING_HOME/key)
 //   bun scripts/crowd.ts verify                give each wallet its first transaction and self-verify it
 //   bun scripts/crowd.ts tick [dry]            one round: a couple of personas look around and make one move each
 //   bun scripts/crowd.ts status
 //
 // Needs ANTHROPIC_API_KEY. Keys live in CROWD_HOME/<name>/key, one per persona, never printed.
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { join } from "node:path";
 import Anthropic from "@anthropic-ai/sdk";
@@ -53,11 +53,28 @@ function account(name: string): PrivateKeyAccount {
   try {
     key = readFileSync(file, "utf8").trim();
   } catch {
-    key = generatePrivateKey();
-    writeFileSync(file, key + "\n", { mode: 0o600 });
-    console.log(`${name}: new identity created`);
+    // "wx": never overwrite a key another process created a moment ago; re-read it instead
+    try {
+      writeFileSync(file, generatePrivateKey() + "\n", { mode: 0o600, flag: "wx" });
+      console.log(`${name}: new identity created`);
+    } catch {}
+    key = readFileSync(file, "utf8").trim();
   }
   return privateKeyToAccount(key as Hex);
+}
+// One tick at a time: the timer and a manual run must not both act for the same personas.
+function lock(): () => void {
+  const dir = join(HOME, "lock");
+  mkdirSync(HOME, { recursive: true, mode: 0o700 });
+  try {
+    mkdirSync(dir, { recursive: false });
+  } catch {
+    const age = Date.now() - statSync(dir).mtimeMs;
+    if (age < 15 * 60_000) throw new Error(`another tick is running (lock ${Math.round(age / 1000)}s old)`);
+    rmSync(dir, { recursive: true, force: true });
+    mkdirSync(dir);
+  }
+  return () => rmSync(dir, { recursive: true, force: true });
 }
 async function call(acc: PrivateKeyAccount, method: string, path: string, body?: unknown) {
   const url = new URL(path, BASE + "/");
@@ -178,53 +195,9 @@ async function act(acc: PrivateKeyAccount, d: Decision): Promise<string> {
 // ---------- budget and state ----------
 const STATE = join(HOME, "state.json");
 const readState = (): any => { try { return JSON.parse(readFileSync(STATE, "utf8")); } catch { return {}; } };
-const writeState = (s: any) => { mkdirSync(HOME, { recursive: true, mode: 0o700 }); writeFileSync(STATE, JSON.stringify(s, null, 2)); };
+const writeState = (s: any) => { mkdirSync(HOME, { recursive: true, mode: 0o700 }); writeFileSync(STATE + ".tmp", JSON.stringify(s, null, 2)); renameSync(STATE + ".tmp", STATE); };
 
-const commands: Record<string, (arg?: string) => Promise<void>> = {
-  async register() {
-    for (const p of PERSONAS) {
-      const acc = account(p.name);
-      try {
-        await call(acc, "POST", "/api/v1/agents/register", { name: p.name, description: p.description });
-        console.log(`${p.name}: registered at ${acc.address}`);
-      } catch (e) {
-        if (!String(e).includes("already_registered")) throw e;
-        console.log(`${p.name}: already registered at ${acc.address}`);
-      }
-    }
-  },
-  // The funding key is hoodape's (MEMEAGENT_HOME/key): a few ten-thousandths of an ETH per wallet, for gas.
-  async fund() {
-    const fundHome = process.env.MEMEAGENT_HOME || join(import.meta.dir, "..", "data", "memeagent");
-    const funder = privateKeyToAccount(readFileSync(join(fundHome, "key"), "utf8").trim() as Hex);
-    const wallet = createWalletClient({ account: funder, chain, transport: http(RPC) });
-    for (const p of PERSONAS) {
-      const acc = account(p.name);
-      const bal = await pub.getBalance({ address: acc.address });
-      if (bal > 0n) { console.log(`${p.name}: already has ${formatEther(bal)} ETH`); continue; }
-      const hash = await wallet.sendTransaction({ to: acc.address, value: parseEther(FUND_ETH) });
-      await pub.waitForTransactionReceipt({ hash, timeout: 120_000 });
-      console.log(`${p.name}: funded ${FUND_ETH} ETH -> ${hash}`);
-    }
-  },
-  // First transaction from each wallet (a zero-value transfer to itself), then the self-verification call.
-  async verify() {
-    for (const p of PERSONAS) {
-      const acc = account(p.name);
-      const me = await call(acc, "GET", "/api/v1/agents/me").catch(() => null);
-      if (me?.agent?.status === "active") { console.log(`${p.name}: already active (${me.agent.verification})`); continue; }
-      if ((await pub.getTransactionCount({ address: acc.address })) === 0) {
-        const wallet = createWalletClient({ account: acc, chain, transport: http(RPC) });
-        const hash = await wallet.sendTransaction({ to: acc.address, value: 0n });
-        await pub.waitForTransactionReceipt({ hash, timeout: 120_000 });
-        console.log(`${p.name}: first transaction ${hash}`);
-      }
-      const r = await call(acc, "POST", "/api/v1/claim/self");
-      console.log(`${p.name}: ${r.agent.status}, ${r.agent.verification}`);
-    }
-  },
-  async tick(arg) {
-    const dry = arg === "dry";
+async function tick(dry: boolean) {
     const state = readState();
     const today = new Date().toISOString().slice(0, 10);
     const ticks = state.day === today ? state.ticks ?? 0 : 0;
@@ -268,6 +241,62 @@ const commands: Record<string, (arg?: string) => Promise<void>> = {
       }
     }
     if (!dry) writeState({ ...state, day: today, ticks: ticks + 1, last, made });
+}
+
+const commands: Record<string, (arg?: string) => Promise<void>> = {
+  async register() {
+    for (const p of PERSONAS) {
+      const acc = account(p.name);
+      try {
+        await call(acc, "POST", "/api/v1/agents/register", { name: p.name, description: p.description });
+        console.log(`${p.name}: registered at ${acc.address}`);
+      } catch (e) {
+        if (!String(e).includes("already_registered")) throw e;
+        console.log(`${p.name}: already registered at ${acc.address}`);
+      }
+    }
+  },
+  // The funding key is FUNDING_HOME/key (a wallet holding a little ETH, topped up by hand; hoodape's key only if
+  // that does not exist): a few ten-thousandths of an ETH per wallet, for gas.
+  async fund() {
+    const own = join(process.env.FUNDING_HOME || join(import.meta.dir, "..", "data", "funding"), "key");
+    const fallback = join(process.env.MEMEAGENT_HOME || join(import.meta.dir, "..", "data", "memeagent"), "key");
+    let key: string;
+    try { key = readFileSync(own, "utf8").trim(); } catch { key = readFileSync(fallback, "utf8").trim(); }
+    const funder = privateKeyToAccount(key as Hex);
+    const wallet = createWalletClient({ account: funder, chain, transport: http(RPC) });
+    for (const p of PERSONAS) {
+      const acc = account(p.name);
+      const bal = await pub.getBalance({ address: acc.address });
+      if (bal > 0n) { console.log(`${p.name}: already has ${formatEther(bal)} ETH`); continue; }
+      const hash = await wallet.sendTransaction({ to: acc.address, value: parseEther(FUND_ETH) });
+      await pub.waitForTransactionReceipt({ hash, timeout: 120_000 });
+      console.log(`${p.name}: funded ${FUND_ETH} ETH -> ${hash}`);
+    }
+  },
+  // First transaction from each wallet (a zero-value transfer to itself), then the self-verification call.
+  async verify() {
+    for (const p of PERSONAS) {
+      const acc = account(p.name);
+      const me = await call(acc, "GET", "/api/v1/agents/me").catch(() => null);
+      if (me?.agent?.status === "active") { console.log(`${p.name}: already active (${me.agent.verification})`); continue; }
+      if ((await pub.getTransactionCount({ address: acc.address })) === 0) {
+        const wallet = createWalletClient({ account: acc, chain, transport: http(RPC) });
+        const hash = await wallet.sendTransaction({ to: acc.address, value: 0n });
+        await pub.waitForTransactionReceipt({ hash, timeout: 120_000 });
+        console.log(`${p.name}: first transaction ${hash}`);
+      }
+      const r = await call(acc, "POST", "/api/v1/claim/self");
+      console.log(`${p.name}: ${r.agent.status}, ${r.agent.verification}`);
+    }
+  },
+  async tick(arg) {
+    const unlock = lock();
+    try {
+      await tick(arg === "dry");
+    } finally {
+      unlock();
+    }
   },
   async status() {
     for (const p of PERSONAS) {

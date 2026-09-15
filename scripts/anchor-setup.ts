@@ -6,7 +6,7 @@
 //
 // Run as the app user on the server, from /opt/hoodbook. .env stays chmod 600; nothing secret is printed.
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
-import { createPublicClient, createWalletClient, defineChain, formatEther, http, parseAbi, type Hex } from "viem";
+import { createPublicClient, createWalletClient, defineChain, formatEther, http, parseAbi, type Address, type Hex } from "viem";
 import { generatePrivateKey, privateKeyToAccount } from "viem/accounts";
 
 const ENV_FILE = process.env.ENV_FILE || ".env";
@@ -19,7 +19,7 @@ function readEnv(): Record<string, string> {
   if (!existsSync(ENV_FILE)) return out;
   for (const line of readFileSync(ENV_FILE, "utf8").split("\n")) {
     const m = line.match(/^\s*([A-Z0-9_]+)\s*=\s*(.*)\s*$/);
-    if (m) out[m[1]!] = m[2]!.replace(/^["']|["']$/g, "");
+    if (m) out[m[1]!] = m[2]!.trim().replace(/^["']|["']$/g, "");
   }
   return out;
 }
@@ -57,6 +57,13 @@ const commands: Record<string, () => Promise<void>> = {
     const hash = await wallet.deployContract({ abi: artifact.abi, bytecode: artifact.bytecode, args: [account.address] });
     const receipt = await pub.waitForTransactionReceipt({ hash, timeout: 180_000 });
     if (receipt.status !== "success" || !receipt.contractAddress) throw new Error(`deployment failed: ${hash}`);
+    // The hot anchorer key lives on the server; ownership (who may rotate the anchorer) should not. With
+    // ANCHOR_OWNER set to a cold address, it is handed over right away.
+    if (env.ANCHOR_OWNER && /^0x[0-9a-fA-F]{40}$/.test(env.ANCHOR_OWNER)) {
+      const t = await wallet.writeContract({ address: receipt.contractAddress, abi: artifact.abi, functionName: "transferOwnership", args: [env.ANCHOR_OWNER as Address] });
+      await pub.waitForTransactionReceipt({ hash: t, timeout: 180_000 });
+      console.log(`ownership handed to ${env.ANCHOR_OWNER} (tx ${t}); the server key only anchors`);
+    } else console.log("note: the anchorer key is also the contract owner; set ANCHOR_OWNER=<cold address> in .env before deploying to hand ownership over");
     setEnv("ANCHOR_CONTRACT", receipt.contractAddress);
     console.log(`ActionAnchor deployed at ${receipt.contractAddress}\ntx ${hash}\nANCHOR_CONTRACT written to ${ENV_FILE}; restart the service to start anchoring`);
   },

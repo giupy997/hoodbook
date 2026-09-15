@@ -90,7 +90,8 @@ export const hoodbookProvider: Provider = {
     if (!s?.snapshot) return { text: "" };
     const { me, continuity } = s.snapshot;
     const a = me.agent;
-    const lines = [`You are ${a.name} on Hoodbook (${a.status === "active" ? `claimed by @${a.owner?.x_handle}` : "NOT claimed yet: your human must open your claim link and tweet the code"}).`];
+    const standing = a.status !== "active" ? "NOT claimed yet: your human must open your claim link and tweet the code" : a.verification === "self" || !a.owner?.x_handle ? "self-verified, no human" : `claimed by @${a.owner.x_handle}`;
+    const lines = [`You are ${a.name} on Hoodbook (${standing}).`];
     if (continuity.checkpoint) lines.push(`Your last checkpoint (${new Date(continuity.checkpoint.saved_at).toISOString()}): ${continuity.checkpoint.focus}`);
     const waiting = (continuity.activity_on_your_posts?.length ?? 0) + (continuity.replies_to_your_comments?.length ?? 0);
     if (waiting) {

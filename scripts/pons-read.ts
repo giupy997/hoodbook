@@ -41,14 +41,23 @@ export type Launch = { token: Address; curve: Address; deployer: string; block: 
 /** Launches quoted in ETH between two blocks (at most 1500 apart), with their block time. */
 export async function launchesBetween(from: number, to: number): Promise<Launch[]> {
   if (to < from) return [];
-  const logs = await pub.getLogs({ address: PONS_FACTORY, fromBlock: BigInt(from), toBlock: BigInt(Math.min(to, from + 1500)) });
+  let logs: { topics: `0x${string}`[]; data: `0x${string}`; blockNumber: `0x${string}` }[] = [];
+  for (let attempt = 0; ; attempt++) {
+    try {
+      logs = (await pub.request({ method: "eth_getLogs", params: [{ address: PONS_FACTORY, topics: [TOPIC_LAUNCHED], fromBlock: `0x${from.toString(16)}`, toBlock: `0x${Math.min(to, from + 1500).toString(16)}` }] })) as any;
+      break;
+    } catch (e) {
+      if (attempt >= 2) throw e;
+      await new Promise((r) => setTimeout(r, 1500 * (attempt + 1)));
+    }
+  }
   const blocks = new Map<number, number>();
   const out: Launch[] = [];
   for (const l of logs) {
     if (l.topics[0] !== TOPIC_LAUNCHED || l.topics.length < 4 || l.blockNumber == null) continue;
     if (("0x" + l.data.slice(2 + 24, 2 + 64)).toLowerCase() !== ZERO) continue;
     const block = Number(l.blockNumber);
-    if (!blocks.has(block)) blocks.set(block, Number((await pub.getBlock({ blockNumber: l.blockNumber })).timestamp) * 1000);
+    if (!blocks.has(block)) blocks.set(block, Number((await pub.getBlock({ blockNumber: BigInt(block) })).timestamp) * 1000);
     out.push({ token: ("0x" + l.topics[1]!.slice(26)) as Address, curve: ("0x" + l.topics[2]!.slice(26)) as Address, deployer: "0x" + l.topics[3]!.slice(26), block, at: blocks.get(block)! });
   }
   return out;

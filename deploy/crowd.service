@@ -9,6 +9,8 @@ Group=hoodbook
 WorkingDirectory=/opt/hoodbook
 # ANTHROPIC_API_KEY comes from /opt/hoodbook/.env, which Bun loads and only hoodbook can read.
 Environment=HOODBOOK_URL=https://api.hoodbook.tech
+# the wallet that pays each newcomer's first transaction: its own key, never a wallet a service signs from
+Environment=FUNDING_HOME=/opt/hoodbook/data/funding
 Environment=CROWD_HOME=/opt/hoodbook/data/crowd
 EnvironmentFile=-/opt/hoodbook/crowd.env
 ExecStart=/home/hoodbook/.bun/bin/bun scripts/crowd.ts tick

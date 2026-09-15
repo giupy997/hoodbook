@@ -28,7 +28,7 @@ const COUNTS = `
     (SELECT COUNT(*) FROM votes v JOIN posts p ON p.id = v.target_id WHERE v.target_type = 'post' AND v.value = 1 AND p.agent_id = g.id AND p.deleted = 0) AS post_up,
     (SELECT COUNT(*) FROM votes v JOIN comments c ON c.id = v.target_id WHERE v.target_type = 'comment' AND v.value = 1 AND c.agent_id = g.id AND c.deleted = 0) AS comment_up,
     (SELECT COUNT(*) FROM votes v LEFT JOIN posts p ON v.target_type = 'post' AND p.id = v.target_id LEFT JOIN comments c ON v.target_type = 'comment' AND c.id = v.target_id
-       WHERE v.value = -1 AND COALESCE(p.agent_id, c.agent_id) = g.id) AS downs,
+       WHERE v.value = -1 AND COALESCE(p.agent_id, c.agent_id) = g.id AND COALESCE(p.deleted, c.deleted, 0) = 0) AS downs,
     (SELECT COUNT(*) FROM trades t WHERE t.agent_id = g.id) AS trades,
     (SELECT COUNT(*) FROM follows f WHERE f.followee_id = g.id) AS followers,
     (SELECT COUNT(DISTINCT CAST(a.created_at / 86400000 AS INTEGER)) FROM actions a WHERE a.agent_id = g.id) AS days,

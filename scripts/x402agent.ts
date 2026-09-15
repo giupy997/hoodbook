@@ -19,7 +19,7 @@ import { createHash } from "node:crypto";
 import { join } from "node:path";
 import { Database } from "bun:sqlite";
 import { Hono } from "hono";
-import { createWalletClient, formatEther, formatUnits, http, isAddress, parseAbi, recoverMessageAddress, type Address, type Hex } from "viem";
+import { createWalletClient, formatEther, formatUnits, http, isAddress, parseAbi, parseEther, recoverMessageAddress, type Address, type Hex } from "viem";
 import { generatePrivateKey, privateKeyToAccount, type PrivateKeyAccount } from "viem/accounts";
 import { getMemePools } from "../src/memepools";
 import { chain, cleanSymbol, curvePrice, demand, ERC20, ethUsd, launchesBetween, PONS_FACTORY, pub, RPC, TOPIC_LAUNCHED, USDG, ZERO, CURVE } from "./pons-read";
@@ -29,6 +29,7 @@ const PUBLIC_URL = (process.env.X402_PUBLIC_URL || `${BASE}/x402`).replace(/\/+$
 const HOME = process.env.X402AGENT_HOME || join(import.meta.dir, "..", "data", "x402agent");
 const NAME = process.env.X402AGENT_NAME || "hood402";
 const PORT = Number(process.env.X402_PORT || 8402);
+const RATE_PER_MINUTE = Number(process.env.X402_RATE_PER_MINUTE || 60);
 const KEY_FILE = join(HOME, "key");
 const NETWORK = `eip155:${chain.id}`;
 const EXPLORER = "https://robinhoodchain.blockscout.com";
@@ -156,7 +157,8 @@ async function fetchPayment(txHash: Hex, payTo: string): Promise<VerifiedPayment
   if (!tx || !receipt || receipt.status !== "success") throw new PayError(400, "tx_failed", "That transaction reverted");
   const block = await pub.getBlock({ blockNumber: receipt.blockNumber });
   const at = Number(block.timestamp) * 1000;
-  if (Date.now() - at > 3_600_000) throw new PayError(400, "tx_too_old", "Only payments from the last hour count");
+  // a payment is never lost to a late retry: the payments table already makes every hash single-use
+  if (Date.now() - at > 30 * 86_400_000) throw new PayError(400, "tx_too_old", "Only payments from the last 30 days count");
   const to = (tx.to ?? "").toLowerCase();
   if (to === payTo.toLowerCase() && tx.value > 0n) {
     return { payer: tx.from.toLowerCase(), asset: "ETH", amount: tx.value, usd: Number(formatEther(tx.value)) * (await ethUsd()), at };
@@ -180,18 +182,38 @@ const b64 = (v: unknown) => Buffer.from(JSON.stringify(v)).toString("base64");
 const unb64 = (s: string | undefined) => { try { return s ? JSON.parse(Buffer.from(s, "base64").toString("utf8")) : null; } catch { return null; } };
 
 async function accepts(payTo: string, usd: number) {
-  const eth = await ethUsd();
-  const wei = BigInt(Math.ceil((usd / eth) * 1e18));
+  // no ETH price right now: the USDG and credit options still stand, so a 402 is always answerable
+  const eth = await ethUsd().catch(() => null);
+  const wei = eth ? BigInt(Math.ceil((usd / eth) * 1e18)) : null;
   return [
-    { scheme: "exact-tx", network: NETWORK, amount: wei.toString(), asset: ZERO, payTo, maxTimeoutSeconds: 600, extra: { name: "ETH", usd, how: "Send at least `amount` wei to payTo on Robinhood Chain, then retry with payload {\"txHash\"}. Anything above the price becomes credit." } },
+    ...(wei ? [{ scheme: "exact-tx", network: NETWORK, amount: wei.toString(), asset: ZERO, payTo, maxTimeoutSeconds: 600, extra: { name: "ETH", usd, how: "Send at least `amount` wei to payTo on Robinhood Chain, then retry with payload {\"txHash\"}. Anything above the price becomes credit." } }] : []),
     { scheme: "exact-tx", network: NETWORK, amount: String(Math.ceil(usd * 1e6)), asset: USDG, payTo, maxTimeoutSeconds: 600, extra: { name: "USDG", decimals: 6, usd, how: "Transfer at least `amount` USDG (6 decimals) to payTo, then retry with payload {\"txHash\"}." } },
     { scheme: "credit", network: NETWORK, amount: String(Math.ceil(usd * 1e6)), asset: "USD", payTo, maxTimeoutSeconds: 60, extra: { usd, how: `Top up once (POST ${PUBLIC_URL}/topup with an exact-tx payment), then sign "${SIGN_PREFIX}\\n<host>\\n<METHOD>\\n<path>\\n<unix ms>\\n<random nonce>" with EIP-191 and send payload {"from","timestamp","nonce","signature"}.`, balance: `${PUBLIC_URL}/credit/<address>` } },
   ];
 }
 
+// Per-IP fixed window: an exact-tx settle costs RPC calls, and the desk shares the public RPC with the API.
+const buckets = new Map<string, { n: number; until: number }>();
+function limited(ip: string, max: number, windowMs: number) {
+  const now = Date.now();
+  const b = buckets.get(ip);
+  if (!b || b.until <= now) { buckets.set(ip, { n: 1, until: now + windowMs }); if (buckets.size > 20_000) buckets.clear(); return false; }
+  b.n++;
+  return b.n > max;
+}
+const clientIp = (c: any) => (c.req.header("x-forwarded-for") ?? "").split(",")[0]?.trim() || "local";
+
 export function buildApp(acc: PrivateKeyAccount) {
   const app = new Hono();
   const payTo = acc.address;
+  app.use("*", async (c, next) => {
+    c.header("access-control-allow-origin", "*");
+    c.header("access-control-allow-headers", "content-type, payment-signature, x-payment");
+    c.header("access-control-expose-headers", "payment-required, payment-response");
+    if (c.req.method === "OPTIONS") return c.body(null, 204);
+    if (limited(clientIp(c), RATE_PER_MINUTE, 60_000)) return c.json({ x402Version: 2, error: "rate_limited: at most " + RATE_PER_MINUTE + " requests a minute per address" }, 429);
+    await next();
+  });
   const resourceOf = (c: any, description: string) => ({ url: `${PUBLIC_URL}${new URL(c.req.url).pathname.replace(/^\/x402/, "")}`, description, mimeType: "application/json" });
 
   const required = async (c: any, usd: number, description: string, error: string, extra: Record<string, unknown> = {}, service?: (typeof SERVICES)[number]) => {
@@ -218,6 +240,7 @@ export function buildApp(acc: PrivateKeyAccount) {
       const key = `${from.toLowerCase()}:${nonce}`;
       if (db().query("SELECT 1 FROM seen WHERE key = ?").get(key)) throw new PayError(400, "replayed", "that signature was already used");
       db().query("INSERT INTO seen (key, at) VALUES (?, ?)").run(key, Date.now());
+      db().query("DELETE FROM seen WHERE at < ?").run(Date.now() - 10 * 60_000); // timestamps older than 60 s are refused above anyway
       const balance = creditOf(from);
       if (balance + 1e-9 < usd) throw new PayError(402, "insufficient_credit", `credit ${money(balance)}, this costs ${money(usd)}: top up at ${PUBLIC_URL}/topup`);
       db().query("UPDATE credits SET usd = ROUND(usd - ?, 6) WHERE address = ?").run(usd, from.toLowerCase());
@@ -321,15 +344,19 @@ export function buildApp(acc: PrivateKeyAccount) {
     }));
     return { eth_usd: eth, launches: rows.sort((a, b) => b.net_eth - a.net_eth) };
   });
+  app.get("/x402/token/:address", async (c, next) => {
+    if (!isAddress(c.req.param("address"))) return c.json({ x402Version: 2, error: "bad_address: not an EVM address" }, 400);
+    await next();
+  });
   paid("/x402/token/:address", async (c) => {
     const address = c.req.param("address");
-    if (!isAddress(address)) return { error: "bad_address" };
     // the curve is looked up from the launch event of this token
     const latest = Number(await pub.getBlockNumber());
     const topic = "0x" + address.slice(2).toLowerCase().padStart(64, "0");
     const logs = (await pub.request({ method: "eth_getLogs", params: [{ address: PONS_FACTORY, fromBlock: `0x${Math.max(0, latest - 40_000).toString(16)}`, toBlock: `0x${latest.toString(16)}`, topics: [TOPIC_LAUNCHED as Hex, topic as Hex] }] })) as { topics: string[]; blockNumber: string }[];
     const l = logs[0];
-    if (!l) return { token: { address, error: "not_found", note: "no Pons launch of that token in the last ~1 day of blocks" } };
+    // nothing to sell: the throw sends the price back as credit
+    if (!l) throw new Error("no Pons launch of that token in the last ~1 day of blocks");
     const curve = ("0x" + l.topics[2]!.slice(26)) as Address, deployer = "0x" + l.topics[3]!.slice(26), launchBlock = Number(BigInt(l.blockNumber));
     const [d, spot, symbol, graduated, eth] = await Promise.all([demand(curve, launchBlock, deployer), curvePrice(curve).catch(() => null), pub.readContract({ address: address as Address, abi: ERC20, functionName: "symbol" }).then(cleanSymbol).catch(() => "TOKEN"), pub.readContract({ address: curve, abi: CURVE, functionName: "graduated" }).catch(() => false), ethUsd()]);
     return { token: { symbol, address, curve, deployer, launch_block: launchBlock, ...d, price_eth: spot?.price ?? null, eth_in_curve: spot?.eth_reserve ?? null, fdv_usd: spot ? Math.round(spot.fdv_eth * eth) : null, graduated } };
@@ -357,7 +384,9 @@ const commands: Record<string, () => Promise<void>> = {
   async serve() {
     const acc = account();
     const app = buildApp(acc);
-    Bun.serve({ hostname: "127.0.0.1", port: PORT, fetch: app.fetch });
+    // idleTimeout well above a settle (RPC retries) plus the paid lookup: Bun would otherwise drop the socket
+    // after 10 silent seconds with the payment already recorded and nothing delivered
+    Bun.serve({ hostname: "127.0.0.1", port: PORT, fetch: app.fetch, idleTimeout: 120, maxRequestBodySize: 64 * 1024 });
     log(`${NAME} serving x402 on 127.0.0.1:${PORT}, payTo ${acc.address}, public ${PUBLIC_URL}`);
     const welcome = () => grantWelcome().catch((e) => log(`welcome pass failed: ${e}`));
     welcome();
@@ -412,7 +441,7 @@ const commands: Record<string, () => Promise<void>> = {
     }
     const balance = await pub.getBalance({ address: acc.address });
     const fee = (await pub.getGasPrice()) * 21_000n * 2n;
-    const amount = what === "all" ? balance - fee : BigInt(Math.round(Number(what) * 1e18));
+    const amount = what === "all" ? balance - fee : parseEther(what);
     if (amount <= 0n || amount + fee > balance) throw new Error(`cannot send ${what}: balance ${formatEther(balance)} ETH`);
     const hash = await wallet.sendTransaction({ to, value: amount });
     await pub.waitForTransactionReceipt({ hash, timeout: 120_000 });

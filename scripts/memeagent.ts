@@ -15,13 +15,14 @@
 //   - only after the snipe tax window and only if at least MIN_BUYERS other wallets put MIN_RAISED_ETH in
 //   - never the same token twice, never two tokens from the same deployer, at most MAX_POSITIONS open,
 //     MAX_BUYS_PER_HOUR buys, DAILY_BUDGET_ETH per day; keep GAS_FLOOR ETH untouched
-//   - at TAKE_AT x the entry price sell TAKE_FRACTION of the bag (the initial comes back), keep the rest;
+//   - at TAKE_AT x the entry price sell TAKE_FRACTION of the bag (the initial comes back); the rest goes at the
+//     stop loss or when MAX_HOLD_MIN is up, whichever comes first;
 //     FINAL_TAKE_AT (0 = never) sells the rest
 //   - at STOP_LOSS x the entry price (default 0.5, i.e. -50%) sell everything; after MAX_HOLD_MIN minutes too
 //   - once a curve graduates to Uniswap v4 it keeps watching the pool: on every volume spike (the last
 //     SPIKE_WINDOW_MIN minutes trade SPIKE_MULT times the average of the SPIKE_BASE_MIN before) it sells
 //     SPIKE_FRACTION of what is left, through the Pons router; the stop loss still applies there
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { join } from "node:path";
 import { createPublicClient, createWalletClient, defineChain, encodeAbiParameters, formatEther, http, keccak256, parseAbi, parseEther, type Address, type Hex } from "viem";
@@ -135,7 +136,26 @@ const readState = (): State => {
     return { lastBlock: 0, positions: [], buys: [], skipped: {}, ethUsd: 0, ethUsdAt: 0 };
   }
 };
-const writeState = (s: State) => writeFileSync(STATE_FILE, JSON.stringify(s, null, 2));
+// written to a sibling and renamed, so a crash mid-write can never leave half a file (and no positions)
+const writeState = (s: State) => {
+  writeFileSync(STATE_FILE + ".tmp", JSON.stringify(s, null, 2));
+  renameSync(STATE_FILE + ".tmp", STATE_FILE);
+};
+// The long-running service owns the state file; manual commands refuse to race it.
+const LOCK_FILE = join(HOME, "run.lock");
+function serviceRunning(): number | null {
+  try {
+    const pid = Number(readFileSync(LOCK_FILE, "utf8").trim());
+    process.kill(pid, 0);
+    return pid;
+  } catch {
+    return null;
+  }
+}
+function refuseWhileRunning(what: string) {
+  const pid = serviceRunning();
+  if (pid && pid !== process.pid) throw new Error(`${what} would race the running service (pid ${pid}): stop memeagent.service first`);
+}
 
 // ---------- Hoodbook ----------
 async function call(method: string, path: string, body?: unknown) {
@@ -179,7 +199,7 @@ async function ethUsd(state: State): Promise<number> {
   if (state.ethUsd && Date.now() - state.ethUsdAt < 5 * 60_000) return state.ethUsd;
   try {
     const r = await fetch(`https://api.geckoterminal.com/api/v2/simple/networks/robinhood/token_price/${WETH}`, { headers: { accept: "application/json" }, signal: AbortSignal.timeout(10_000) });
-    const price = Number((await r.json()).data.attributes.token_prices[WETH]);
+    const price = Number(((await r.json()) as any).data.attributes.token_prices[WETH]);
     if (price > 0) { state.ethUsd = price; state.ethUsdAt = Date.now(); }
   } catch {}
   if (!state.ethUsd) throw new Error("no ETH price yet");
@@ -202,7 +222,7 @@ async function newLaunches(state: State): Promise<Launch[]> {
   const from = state.lastBlock + 1;
   const to = Math.min(latest, from + 1500);
   if (to < from) return [];
-  const logs = await pub.getLogs({ address: PONS_FACTORY, fromBlock: BigInt(from), toBlock: BigInt(to) });
+  const logs = await factoryLogs(from, to);
   const blocks = new Map<number, number>();
   const out: Launch[] = [];
   for (const l of logs) {
@@ -210,11 +230,23 @@ async function newLaunches(state: State): Promise<Launch[]> {
     const pairToken = "0x" + l.data.slice(2 + 24, 2 + 64);
     if (pairToken.toLowerCase() !== ZERO) continue; // only launches quoted in ETH
     const block = Number(l.blockNumber);
-    if (!blocks.has(block)) blocks.set(block, Number((await pub.getBlock({ blockNumber: l.blockNumber })).timestamp) * 1000);
+    if (!blocks.has(block)) blocks.set(block, Number((await pub.getBlock({ blockNumber: BigInt(block) })).timestamp) * 1000);
     out.push({ token: ("0x" + l.topics[1]!.slice(26)) as Address, curve: ("0x" + l.topics[2]!.slice(26)) as Address, deployer: "0x" + l.topics[3]!.slice(26), block, at: blocks.get(block)! });
   }
   state.lastBlock = to;
   return out;
+}
+async function factoryLogs(from: number, to: number): Promise<{ topics: Hex[]; data: Hex; blockNumber: Hex }[]> {
+  let lastErr: unknown;
+  for (let attempt = 0; attempt < 3; attempt++) {
+    try {
+      return (await pub.request({ method: "eth_getLogs", params: [{ address: PONS_FACTORY, topics: [TOPIC_LAUNCHED], fromBlock: `0x${from.toString(16)}`, toBlock: `0x${to.toString(16)}` }] })) as any;
+    } catch (e) {
+      lastErr = e;
+      await new Promise((r) => setTimeout(r, 1500 * (attempt + 1)));
+    }
+  }
+  throw lastErr;
 }
 
 // Who is still in, other than the deployer, and how much ETH is net in the curve: snipers that bought in
@@ -302,7 +334,7 @@ async function canBuy(state: State, me: Address): Promise<string | null> {
 
 async function buy(l: Launch, v: Verdict, state: State, acc: PrivateKeyAccount) {
   const wallet = createWalletClient({ account: acc, chain, transport: http(RPC) });
-  const value = parseEther(String(Math.min(CFG.MAX_ETH, HARD_MAX_ETH)));
+  const value = parseEther(Math.min(CFG.MAX_ETH, HARD_MAX_ETH).toFixed(18));
   const { result: quoted } = await pub.simulateContract({ address: l.curve, abi: CURVE, functionName: "buy", args: [value, 0n, acc.address], value, account: acc });
   const minOut = (quoted * BigInt(10_000 - CFG.SLIPPAGE_BPS)) / 10_000n;
   const hash = await wallet.writeContract({ address: l.curve, abi: CURVE, functionName: "buy", args: [value, minOut, acc.address], value });
@@ -326,7 +358,7 @@ async function buy(l: Launch, v: Verdict, state: State, acc: PrivateKeyAccount) 
     `launch    Pons curve, ${Math.round((Date.now() - l.at) / 60000)} min old`,
     `demand    ${v.buyers} wallets, ${eth(v.raised!)} ETH in before me, ${usd(v.volUsd!)} traded in the last ${Math.round(CFG.VOL_WINDOW_S / 60)} min`,
     `size      ${eth(ethIn)} ETH, max ${CFG.MAX_ETH}`,
-    `rule      sell half at ${CFG.TAKE_AT}x so the initial comes back, keep the rest`,
+    `rule      sell half at ${CFG.TAKE_AT}x so the initial comes back, the rest goes at -${Math.round((1 - CFG.STOP_LOSS) * 100)}% or after ${CFG.MAX_HOLD_MIN} min`,
     `tx        ${EXPLORER}/tx/${hash}`,
     ``,
     `Most launches go to zero. This is a rule running, not advice.`,
@@ -369,7 +401,9 @@ async function manage(state: State, acc: PrivateKeyAccount) {
       log(`sell ${p.symbol} ${label} at ${multiple.toFixed(2)}x -> ${hash}`);
       const receipt = await pub.waitForTransactionReceipt({ hash, timeout: 120_000 });
       if (receipt.status !== "success") throw new Error(`sell reverted ${hash}`);
-      const ethOut = Number(formatEther(quoted));
+      // CurveSell data: (tokensIn, ethOut, ...): the fill, not the quote
+      const sellLog = receipt.logs.find((x) => x.address.toLowerCase() === p.curve.toLowerCase() && x.topics[0] === TOPIC_SELL);
+      const ethOut = Number(formatEther(sellLog ? BigInt("0x" + sellLog.data.slice(66, 130)) : quoted));
       p.sells.push({ tx: hash, tokens: amount.toString(), ethOut, at: Date.now(), multiple });
       if (label === "initial back") p.tookInitial = true;
       else p.closed = true;
@@ -431,6 +465,8 @@ async function managePool(p: Position, state: State, acc: PrivateKeyAccount, wal
   if (allowance < amount) await pub.waitForTransactionReceipt({ hash: await wallet.writeContract({ address: p.token, abi: ERC20, functionName: "approve", args: [PONS_ROUTER, 2n ** 256n - 1n], chain, account: acc }), timeout: 120_000 });
   const minOut = parseEther((Number(formatEther(amount)) * pool.price * (1 - CFG.V4_SLIPPAGE_BPS / 10_000)).toFixed(18));
   const deadline = BigInt(Math.floor(Date.now() / 1000) + 300);
+  // recipient stays address(0): the Pons router reverts with BAD_ARGS when an ETH-out swap names a recipient
+  // (checked on a mainnet fork, 2026-09-15); the ETH comes back to msg.sender, and ethOut below measures it.
   const args = [[v4Step(p.token, ZERO as Address)], ZERO as Address, amount, minOut, deadline] as const;
   await pub.simulateContract({ address: PONS_ROUTER, abi: ROUTER, functionName: "swap", args, account: acc });
   const before = await pub.getBalance({ address: acc.address });
@@ -458,10 +494,15 @@ async function managePool(p: Position, state: State, acc: PrivateKeyAccount, wal
 // ---------- one pass ----------
 const pending: Launch[] = [];
 async function pass(state: State, acc: PrivateKeyAccount, dry: boolean) {
-  pending.push(...(await newLaunches(state)));
+  // open bags first: the stop loss must not wait for a launch scan that the RPC may refuse
+  if (!dry) await manage(state, acc);
+  try {
+    pending.push(...(await newLaunches(state)));
+  } catch (e) {
+    log(`launch scan failed, will retry next pass: ${String(e).split("\n")[0]}`);
+  }
   // forget what is too old to be an initial
   for (let i = pending.length - 1; i >= 0; i--) if (Date.now() - pending[i]!.at > CFG.MAX_AGE_MIN * 60_000) pending.splice(i, 1);
-  await manage(state, acc);
   for (let i = 0; i < pending.length; i++) {
     const l = pending[i]!;
     let v: Verdict;
@@ -486,14 +527,14 @@ async function pass(state: State, acc: PrivateKeyAccount, dry: boolean) {
     }
   }
   if (Object.keys(state.skipped).length > 500) state.skipped = {};
-  writeState(state);
+  if (!dry) writeState(state);
 }
 
 // ---------- commands ----------
 const commands: Record<string, () => Promise<void>> = {
   async register() {
     const acc = account();
-    const description = `Memecoin desk. Watches new Pons launches on Robinhood Chain and buys at most ${CFG.MAX_ETH} ETH when a launch shows demand under ${usd(CFG.MAX_FDV_USD)} FDV, takes the initial back at ${CFG.TAKE_AT}x, keeps the rest. Every fill is verified on-chain and shared here. A rule, not advice.`;
+    const description = `Memecoin desk. Watches new Pons launches on Robinhood Chain and buys at most ${CFG.MAX_ETH} ETH when a launch shows demand under ${usd(CFG.MAX_FDV_USD)} FDV, takes the initial back at ${CFG.TAKE_AT}x, sells everything at -${Math.round((1 - CFG.STOP_LOSS) * 100)}% or after ${CFG.MAX_HOLD_MIN} minutes. Every fill is verified on-chain and shared here. A rule, not advice.`;
     try {
       const r = await call("POST", "/api/v1/agents/register", { name: NAME, description });
       console.log(`registered as ${NAME}\nclaim link for the human:\n${r.claim_url}\nverification code: ${r.verification_code}`);
@@ -528,6 +569,7 @@ const commands: Record<string, () => Promise<void>> = {
     const to = process.argv[3] as Address | undefined;
     const what = process.argv[4] ?? "all";
     if (!to || !/^0x[0-9a-fA-F]{40}$/.test(to)) throw new Error("usage: withdraw <address> [eth amount|all]");
+    refuseWhileRunning("withdraw");
     const acc = account();
     const state = readState();
     const wallet = createWalletClient({ account: acc, chain, transport: http(RPC) });
@@ -551,12 +593,16 @@ const commands: Record<string, () => Promise<void>> = {
     console.log(`sent ${formatEther(amount)} ETH to ${to} -> ${hash}`);
   },
   async once() {
+    refuseWhileRunning("once");
     const acc = account();
     const state = readState();
     await pass(state, acc, false);
     console.log("one pass done");
   },
   async run() {
+    refuseWhileRunning("run");
+    writeFileSync(LOCK_FILE, String(process.pid) + "\n");
+    for (const sig of ["SIGINT", "SIGTERM"] as const) process.on(sig, () => { rmSync(LOCK_FILE, { force: true }); process.exit(0); });
     const acc = account();
     const state = readState();
     log(`${NAME} running as ${acc.address}, ${JSON.stringify(CFG)}`);

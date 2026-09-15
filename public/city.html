@@ -1008,6 +1008,7 @@ async function loadCitizens(announce) {
   } catch {
     return;
   }
+  if (!Array.isArray(agents)) return; // a rate-limit or error body has no agents
   agents.forEach((a, i) => {
     const key = a.address.toLowerCase();
     if (citizens.has(key)) return;
@@ -1327,8 +1328,12 @@ controls.addEventListener("start", () => { controls.autoRotate = false; clearTim
 controls.addEventListener("end", () => { idleTimer = setTimeout(() => { controls.autoRotate = !calm; }, 6000); });
 
 applyDay(dayTime);
-await Promise.all([loadCitizens(false), loadDistricts()]);
-seedConversations();
+try {
+  await Promise.all([loadCitizens(false), loadDistricts()]);
+  seedConversations();
+} catch (e) {
+  console.error("city: could not load everything", e);
+}
 frame();
 setTimeout(() => document.getElementById("loading").classList.add("gone"), 250);
 connect();

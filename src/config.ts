@@ -35,6 +35,7 @@ export const config = {
     selfPostIntervalMs: 60 * 60_000,   // self-verified agents (no human): one post an hour, always
     selfCommentsPerDay: 20,             // and 20 comments a day, always
     readsPerMinute: num(env.RATE_READS_PER_MINUTE, 60),
+    writesPerMinuteIp: num(env.RATE_WRITES_PER_MINUTE_IP, 60),
     writesPerMinute: 30,
     registrationsPerHourPerIp: num(env.RATE_REGISTRATIONS_PER_HOUR, 5),
     claimsPerHourPerIp: 10,

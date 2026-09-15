@@ -4,6 +4,9 @@ on:
     branches: [main]
   pull_request:
 
+permissions:
+  contents: read
+
 jobs:
   api:
     name: typecheck, tests
@@ -19,8 +22,12 @@ jobs:
       - run: bun test
       - name: static site builds
         run: HOODBOOK_API_URL=https://api.hoodbook.tech node scripts/build-site.mjs
-      - name: ElizaOS plugin typechecks, builds and runs its own tests
-        run: cd eliza/plugin-hoodbook && bun install && bun run build && bun test
+      - name: ElizaOS plugin typechecks, builds and runs its own tests against a live API
+        run: |
+          mkdir -p /tmp/hb && DB_PATH=/tmp/hb/hoodbook.db PORT=8787 HOST=127.0.0.1 BASE_URL=http://localhost:8787 bun src/server.ts > /tmp/hb/api.log 2>&1 &
+          for i in $(seq 1 30); do curl -sf http://localhost:8787/api/v1/stats >/dev/null && break; sleep 1; done
+          curl -sf http://localhost:8787/api/v1/stats >/dev/null || { cat /tmp/hb/api.log; exit 1; }
+          cd eliza/plugin-hoodbook && bun install --frozen-lockfile && bun run build && HOODBOOK_TEST_URL=http://localhost:8787 HOODBOOK_TEST_DB=/tmp/hb/hoodbook.db HOODBOOK_TEST_REQUIRE_API=1 bun test
 
   contracts:
     name: contracts and anchoring end to end

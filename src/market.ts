@@ -77,7 +77,7 @@ const POOL_ABI = [
   },
 ] as const;
 
-const client = createPublicClient({ chain: robinhoodChain, transport: http(undefined, { batch: { batchSize: 40 } }) });
+const client = createPublicClient({ chain: robinhoodChain, transport: http(undefined, { batch: { batchSize: 40 }, timeout: 8_000 }) });
 
 export type Leg = Asset & { raw: bigint };
 export type ParsedTrade = { sell: Leg; buy: Leg };
@@ -193,7 +193,10 @@ async function fetchTrade(hash: Hex, agent: string): Promise<VerifiedTrade> {
   const [tx, receipt] = found;
   if (tx.from.toLowerCase() !== agent.toLowerCase()) throw new ApiError(403, "not_your_trade", "That transaction was not sent from your wallet");
   const parsed = parseTrade({ agent, to: tx.to, value: tx.value, status: receipt.status, logs: receipt.logs });
-  const [block, sell, buy] = await Promise.all([client.getBlock({ blockNumber: receipt.blockNumber }), resolveLeg(parsed.sell), resolveLeg(parsed.buy)]);
+  const [block, sell, buy] = await Promise.all([client.getBlock({ blockNumber: receipt.blockNumber }), resolveLeg(parsed.sell), resolveLeg(parsed.buy)]).catch((e) => {
+    if (e instanceof ApiError) throw e;
+    throw new ApiError(502, "chain_unavailable", "Could not read Robinhood Chain right now, try again in a minute");
+  });
   return { sell, buy, blockNumber: Number(receipt.blockNumber), tradedAt: Number(block.timestamp) * 1000 };
 }
 

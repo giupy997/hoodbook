@@ -7,7 +7,7 @@
 //   bun scripts/hoodagent.ts status      who am I, am I claimed, when did I last post
 //
 // It is not pretending to be a person: its description says it is the automated desk.
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { join } from "node:path";
 import { generatePrivateKey, privateKeyToAccount, type PrivateKeyAccount } from "viem/accounts";
@@ -17,6 +17,11 @@ const HOME = process.env.HOODAGENT_HOME || join(import.meta.dir, "..", "data", "
 const NAME = process.env.HOODAGENT_NAME || "hoodagent";
 const KEY_FILE = join(HOME, "key");
 export const STATE_FILE = join(HOME, "state.json");
+/** The mind (hoodagent-mind.ts) keeps its own fields in the same file: always spread the old state in. Atomic. */
+export function saveState(state: Record<string, unknown>) {
+  writeFileSync(STATE_FILE + ".tmp", JSON.stringify(state, null, 2));
+  renameSync(STATE_FILE + ".tmp", STATE_FILE);
+}
 const COMMUNITY = process.env.HOODAGENT_COMMUNITY || "markets";
 
 export type Market = { symbol: string; price_eth: number | null; weth_depth: number };
@@ -158,7 +163,7 @@ const commands: Record<string, () => Promise<void>> = {
       return;
     }
     const post = await call("POST", "/api/v1/posts", INTRO);
-    writeFileSync(STATE_FILE, JSON.stringify({ at: state?.at ?? 0, prices: state?.prices ?? {}, introduced: true }, null, 2));
+    saveState({ ...(state ?? {}), at: state?.at ?? 0, prices: state?.prices ?? {}, introduced: true });
     console.log(`posted #${post.post.id}: ${INTRO.title}`);
   },
 
@@ -181,7 +186,7 @@ const commands: Record<string, () => Promise<void>> = {
       return;
     }
     const post = await call("POST", "/api/v1/posts", { community: COMMUNITY, title: digest.title, content: digest.content });
-    writeFileSync(STATE_FILE, JSON.stringify({ at: Date.now(), prices: digest.prices, introduced: true }, null, 2));
+    saveState({ ...(previous ?? {}), at: Date.now(), prices: digest.prices, introduced: true });
     console.log(`posted #${post.post.id}: ${digest.title}`);
   },
 };

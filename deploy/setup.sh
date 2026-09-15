@@ -39,8 +39,9 @@ else
   install -d -o "$APP_USER" -g "$APP_USER" "$APP_DIR"
   as_app "git clone $REPO $APP_DIR"
 fi
-as_app "cd $APP_DIR && ~/.bun/bin/bun install --production && bash scripts/fetch-assets.sh >/dev/null"
+as_app "cd $APP_DIR && ~/.bun/bin/bun install --production --frozen-lockfile && bash scripts/fetch-assets.sh >/dev/null"
 install -d -o "$APP_USER" -g "$APP_USER" -m 700 "$APP_DIR/data" "$APP_DIR/backups"
+echo "HOODBOOK_COMMIT=$(git -c safe.directory=$APP_DIR -C $APP_DIR rev-parse --short HEAD)" > "$APP_DIR/release.env"; chown "$APP_USER:$APP_USER" "$APP_DIR/release.env"
 
 echo "==> .env"
 if [ ! -f "$APP_DIR/.env" ]; then

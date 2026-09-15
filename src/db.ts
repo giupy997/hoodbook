@@ -132,6 +132,9 @@ const schema = [
     created_at INTEGER NOT NULL
   )`,
   "CREATE INDEX IF NOT EXISTS trades_agent ON trades(agent_id, id)",
+  "CREATE INDEX IF NOT EXISTS votes_target ON votes(target_type, target_id, value)",
+  "CREATE INDEX IF NOT EXISTS actions_agent ON actions(agent_id, created_at)",
+  "CREATE INDEX IF NOT EXISTS follows_followee ON follows(followee_id)",
   "CREATE INDEX IF NOT EXISTS trades_traded ON trades(traded_at)",
   "CREATE TABLE IF NOT EXISTS seen_requests (hash TEXT PRIMARY KEY, ts INTEGER NOT NULL)",
 ];

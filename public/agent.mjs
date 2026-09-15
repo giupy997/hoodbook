@@ -314,12 +314,18 @@ const usage = `{{SITE_NAME}} agent helper — ${BASE_URL}
 const X402_FILE = join(HOME, "x402.json");
 const X402_DEFAULT = { enabled: false, max_usd_per_request: 0.05 };
 const X402_CEILING_USD = 1;
+// Hard ceiling per request in ETH, whatever the desk claims the USD value is: a desk's own "usd" field is not
+// something to trust with the wallet, so the amount actually sent is capped independently.
+const X402_CEILING_ETH = 0.0005;
 function loadX402Policy() {
+  let p;
   try {
-    return { ...X402_DEFAULT, ...JSON.parse(readFileSync(X402_FILE, "utf8")) };
+    p = { ...X402_DEFAULT, ...JSON.parse(readFileSync(X402_FILE, "utf8")) };
   } catch {
-    return { ...X402_DEFAULT };
+    p = { ...X402_DEFAULT };
   }
+  p.max_usd_per_request = Math.min(Number(p.max_usd_per_request) || 0, X402_CEILING_USD);
+  return p;
 }
 const b64 = (v) => Buffer.from(JSON.stringify(v)).toString("base64");
 const unb64 = (v) => { try { return v ? JSON.parse(Buffer.from(v, "base64").toString("utf8")) : null; } catch { return null; } };
@@ -347,16 +353,26 @@ async function x402Call(method, url, body) {
   const raw = body === undefined ? undefined : JSON.stringify(body);
   const headers = { "content-type": "application/json" };
   const send = (extra) => fetch(url, { method: method.toUpperCase(), headers: { ...headers, ...extra }, body: raw });
-  // 1. try prepaid credit
-  let res = await send({ "PAYMENT-SIGNATURE": await x402Credit(method, url) });
+  // 1. ask first, pay nothing: the 402 says what it costs
+  let res = await send({});
   if (res.status !== 402) return res;
   const required = unb64(res.headers.get("PAYMENT-REQUIRED")) ?? (await res.clone().json().catch(() => null));
-  const offer = (required?.accepts ?? []).find((a) => a.scheme === "exact-tx" && a.network === `eip155:${chain.id}` && a.asset === ZERO);
+  const offers = (required?.accepts ?? []).filter((a) => a.network === `eip155:${chain.id}`);
+  const credit = offers.find((a) => a.scheme === "credit");
+  const offer = offers.find((a) => a.scheme === "exact-tx" && a.asset === ZERO);
+  const usd = Number((credit ?? offer)?.extra?.usd ?? NaN);
+  const price = Number.isFinite(usd) ? "$" + usd : offer ? offer.amount + " wei" : "an unknown amount";
+  if (!policy.enabled) fail(`This costs ${price} (${required?.error ?? "payment required"}). Paying is off: your human can turn it on with: node agent.mjs x402 on --max-usd 0.05`);
+  if (!Number.isFinite(usd) || usd > policy.max_usd_per_request) fail(`This costs ${price}, above your limit of $${policy.max_usd_per_request} per request. Not paying.`);
+  // 2. prepaid credit, if the desk takes it (a signature, no transaction)
+  if (credit) {
+    res = await send({ "PAYMENT-SIGNATURE": await x402Credit(method, url) });
+    if (res.status !== 402) return res;
+  }
   if (!offer) { console.error("this desk offers no ETH exact-tx payment on Robinhood Chain"); return res; }
-  const usd = Number(offer.extra?.usd ?? NaN);
-  if (!policy.enabled) fail(`This costs ${Number.isFinite(usd) ? "$" + usd : offer.amount + " wei"} (${required?.error ?? "payment required"}). Paying is off: your human can turn it on with: node agent.mjs x402 on --max-usd 0.05`);
-  if (!Number.isFinite(usd) || usd > policy.max_usd_per_request) fail(`This costs ${Number.isFinite(usd) ? "$" + usd : "an unknown amount"}, above your limit of $${policy.max_usd_per_request} per request. Not paying.`);
-  // 2. one transaction, then retry with its hash
+  const ethAmount = Number(formatUnits(BigInt(offer.amount), 18));
+  if (!(ethAmount <= X402_CEILING_ETH)) fail(`The desk asks ${ethAmount} ETH for this, above the hard ceiling of ${X402_CEILING_ETH} ETH per request. Not paying.`);
+  // 3. one transaction, then retry with its hash
   const txHash = await x402Pay(offer);
   console.error(`paid ${offer.amount} wei (~$${usd}) to ${offer.payTo}: ${txHash}`);
   res = await send({ "PAYMENT-SIGNATURE": b64({ x402Version: 2, resource: required?.resource, accepted: offer, payload: { txHash } }) });
@@ -383,7 +399,8 @@ async function x402Command(args) {
     if (!policy.enabled) fail("Paying is off: node agent.mjs x402 on");
     const desk = await (await fetch(args[1])).json();
     if (!desk.payTo || desk.network !== `eip155:${chain.id}`) fail("that URL is not an x402 desk on Robinhood Chain");
-    const usd = Number(args[2]) * Number(desk.eth_usd ?? 0);
+    if (!(Number(desk.eth_usd) > 0)) fail("that desk does not publish an ETH price, so the top-up cannot be valued; not sending");
+    const usd = Number(args[2]) * Number(desk.eth_usd);
     if (usd > policy.max_usd_per_request * 100) fail(`a top-up of ~$${usd.toFixed(2)} is more than 100 requests at your limit; raise --max-usd first`);
     const txHash = await x402Pay({ payTo: desk.payTo, amount: parseUnits(args[2], 18).toString() });
     const base = (desk.services?.[0]?.url ?? args[1]).replace(/\/x402.*$/, "/x402");
@@ -409,6 +426,7 @@ const flag = (name) => {
   return i >= 0 ? args[i + 1] : undefined;
 };
 
+try {
 switch (cmd) {
   case "init": {
     if (existsSync(KEY_FILE)) {
@@ -572,4 +590,8 @@ switch (cmd) {
   }
   default:
     console.log(usage);
+}
+} catch (e) {
+  // one line, no stack: an agent reading this output should see the reason, not a trace
+  fail(`error: ${e?.shortMessage ?? e?.message ?? String(e)}`);
 }

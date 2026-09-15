@@ -9,7 +9,7 @@ import { readFileSync, writeFileSync } from "node:fs";
 import Anthropic from "@anthropic-ai/sdk";
 import { zodOutputFormat } from "@anthropic-ai/sdk/helpers/zod";
 import { z } from "zod";
-import { BASE, STATE_FILE, call } from "./hoodagent";
+import { BASE, STATE_FILE, call, saveState } from "./hoodagent";
 
 const MODEL = process.env.HOODAGENT_MODEL || "claude-opus-5";
 const MAX_WAKEUPS_PER_DAY = Number(process.env.HOODAGENT_MAX_WAKEUPS || 60);
@@ -192,7 +192,7 @@ function budget() {
     state,
     wakeups,
     spend(extra: Record<string, unknown>) {
-      writeFileSync(STATE_FILE, JSON.stringify({ ...state, ...extra, wakeups: { day: today, count: wakeups + 1 } }, null, 2));
+      saveState({ ...state, ...extra, wakeups: { day: today, count: wakeups + 1 } });
     },
   };
 }
@@ -211,6 +211,15 @@ async function run(dry: boolean) {
   const ctx = await gather();
   const now = Date.now();
   const lastThinkAt = guard.state.last_think ?? null;
+  // /home hands each reply over once; keep the ones not answered yet, so a wake-up that posted instead does
+  // not make them vanish. A reply is settled when the desk comments on that post, or after a day.
+  const carried: any[] = (guard.state.owed ?? []).filter((r: any) => now - (r.created_at ?? now) < 86_400_000);
+  const merge = (fresh: any[], old: any[]) => [...fresh, ...old.filter((o) => !fresh.some((f) => f.id === o.id))].slice(0, 12);
+  ctx.home = ctx.home ?? {};
+  ctx.home.activity_on_your_posts = merge(ctx.home.activity_on_your_posts ?? [], carried.filter((r) => r.where === "post"));
+  ctx.home.replies_to_your_comments = merge(ctx.home.replies_to_your_comments ?? [], carried.filter((r) => r.where === "comment"));
+  const owedNow = [...ctx.home.activity_on_your_posts.map((r: any) => ({ ...r, where: "post" })), ...ctx.home.replies_to_your_comments.map((r: any) => ({ ...r, where: "comment" }))];
+  const settled = (answeredPostId: number | null) => owedNow.filter((r) => r.post_id !== answeredPostId);
   const plan = planWakeup({
     now,
     claimedAt: me.agent.claimed_at,
@@ -223,6 +232,7 @@ async function run(dry: boolean) {
     console.log(`nothing to act on: posting opens at ${new Date(plan.postReadyAt).toISOString().slice(11, 16)} UTC, no replies owed, nobody new. Skipped without calling the model.`);
     return;
   }
+  if (dry) guard.spend({ owed: settled(null), wakeups_dry: true }); // a dry run must not swallow the replies it saw
   const { decision, usage } = await decide(ctx, plan.postReadyAt);
   console.log(`decision: ${decision.action} — ${decision.reasoning}`);
   console.log(`tokens: ${usage.input_tokens} in (${usage.cache_read_input_tokens ?? 0} cached), ${usage.output_tokens} out`);
@@ -232,16 +242,18 @@ async function run(dry: boolean) {
   }
   if (decision.action === "post" && !plan.canPost) {
     console.log("the model chose post while posting is closed; not sending it");
-    guard.spend({ last_think: now, last_action: "nothing" });
+    guard.spend({ last_think: now, last_action: "nothing", owed: settled(null) });
     return;
   }
+  let answered: number | null = null;
   try {
     console.log(await act(decision));
+    if (decision.action === "comment" && decision.comment) answered = decision.comment.post_id;
   } catch (e) {
     // Cooldowns are normal: the server limits posting to once every 30 minutes.
     console.log(`could not act: ${String((e as Error).message)}`);
   }
-  guard.spend({ last_think: Date.now(), last_action: decision.action });
+  guard.spend({ last_think: Date.now(), last_action: decision.action, owed: settled(answered) });
 }
 
 if (import.meta.main) {

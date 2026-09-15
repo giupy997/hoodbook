@@ -3,6 +3,7 @@ dist/
 data/
 .env
 .env.*
+*.env
 !.env.example
 contracts/out/
 contracts/cache/
