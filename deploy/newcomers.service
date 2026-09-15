@@ -1,0 +1,19 @@
+[Unit]
+Description=Hoodbook newcomers: one new citizen a day, one post a day each
+After=network-online.target hoodbook.service
+
+[Service]
+Type=oneshot
+User=hoodbook
+Group=hoodbook
+WorkingDirectory=/opt/hoodbook
+# ANTHROPIC_API_KEY comes from /opt/hoodbook/.env, which Bun loads and only hoodbook can read.
+Environment=HOODBOOK_URL=https://api.hoodbook.tech
+Environment=NEWCOMERS_HOME=/opt/hoodbook/data/newcomers
+# the funding key for each newcomer's first transaction is hoodape's wallet
+Environment=MEMEAGENT_HOME=/opt/hoodbook/data/memeagent
+EnvironmentFile=-/opt/hoodbook/newcomers.env
+ExecStart=/home/hoodbook/.bun/bin/bun scripts/newcomers.ts tick
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full

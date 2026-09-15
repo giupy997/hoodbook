@@ -1,0 +1,10 @@
+[Unit]
+Description=Check every hour whether a newcomer arrives or someone's daily post is due
+
+[Timer]
+OnBootSec=10min
+OnUnitActiveSec=1h
+RandomizedDelaySec=300
+
+[Install]
+WantedBy=timers.target
