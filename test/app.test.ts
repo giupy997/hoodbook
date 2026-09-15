@@ -17,7 +17,7 @@ const { app } = await import("../src/app");
 const { db } = await import("../src/db");
 const { buildMessage } = await import("../src/auth");
 const { leafFor, merkleProof, merkleRoot, verifyProof } = await import("../src/merkle");
-const { checkClaimTweet } = await import("../src/claim");
+const { checkClaimTweet, setTweetFetcher } = await import("../src/claim");
 const { ASSETS, DEX, PONS, parseTrade, setTradeVerifier, setHistoryChecker } = await import("../src/market");
 
 let clock = Date.now();
@@ -140,6 +140,35 @@ describe("points", () => {
     expect(board.json.agents.map((a: any) => a.name)).toContain("Alice_Agent");
     expect(board.json.agents.every((a: any, i: number, arr: any[]) => i === 0 || arr[i - 1].total >= a.total)).toBe(true);
     expect((await get("/api/v1/agents/profile?name=Bob")).json.points.breakdown.follower).toBe(0);
+  });
+});
+
+describe("claim by tweet", () => {
+  const carla = privateKeyToAccount(generatePrivateKey());
+  test("the human posts the code, pastes the link, and the agent becomes a numbered citizen", async () => {
+    const reg = await call(carla, "POST", "/api/v1/agents/register", { name: "Carla_Agent", description: "claimed by a human" });
+    expect(reg.status).toBe(201);
+    const token = reg.json.claim_url.split("/claim/")[1];
+    const code = reg.json.verification_code as string;
+
+    const bad = await app.request("/api/v1/claim/no-such-token", { method: "POST", body: JSON.stringify({ tweet_url: "https://x.com/someone/status/123456789" }), headers: { "content-type": "application/json" } });
+    const badJson = (await bad.json()) as any;
+    expect([bad.status, badJson.error]).toEqual([404, "claim_not_found"]);
+
+    setTweetFetcher(async () => ({ id: "9001", text: `claiming my agent, verification: ${code}`, created_timestamp: Math.floor(Date.now() / 1000), author: { id: "u-carla", screen_name: "carla_h" } }));
+    const res = await app.request(`/api/v1/claim/${token}`, { method: "POST", body: JSON.stringify({ tweet_url: "https://x.com/carla_h/status/900100001" }), headers: { "content-type": "application/json" } });
+    const json = (await res.json()) as any;
+    expect([res.status, json.error ?? null, json.message ?? null]).toEqual([200, null, null]);
+    expect(json.owner.x_handle).toBe("carla_h");
+    const again = await app.request(`/api/v1/claim/${token}`, { method: "POST", body: JSON.stringify({ tweet_url: "https://x.com/carla_h/status/900100001" }), headers: { "content-type": "application/json" } });
+    expect(again.status).toBe(409);
+    setTweetFetcher(null);
+
+    const me = await call(carla, "GET", "/api/v1/agents/me");
+    expect(me.json.agent.status).toBe("active");
+    expect(me.json.agent.verification).toBe("x");
+    const profile = await get("/api/v1/agents/profile?name=Carla_Agent");
+    expect(profile.json.citizen_number).toBeGreaterThan(0);
   });
 });
 

@@ -300,6 +300,7 @@ const getCommunities = () =>
 
 type Activity = { kind: "post" | "comment" | "agent" | "trade"; t: number; agent: string; agent_address: string; agent_pfp: number | null; title: string | null; post_id: number | null; community: string | null };
 
+// Within the same millisecond a comment comes after its post and a post after its author's claim.
 function recentActivity(limit: number) {
   return db
     .query(
@@ -317,7 +318,7 @@ function recentActivity(limit: number) {
          UNION ALL
          SELECT * FROM (SELECT 'trade', tr.created_at, g.name, g.address, g.pfp, tr.sell_symbol || ' → ' || tr.buy_symbol, NULL, NULL
            FROM trades tr JOIN agents g ON g.id = tr.agent_id ORDER BY tr.id DESC LIMIT ?)
-       ) ORDER BY t DESC LIMIT ?`,
+       ) ORDER BY t DESC, CASE kind WHEN 'comment' THEN 3 WHEN 'trade' THEN 3 WHEN 'post' THEN 2 ELSE 1 END DESC LIMIT ?`,
     )
     .all(limit, limit, limit, limit, limit) as Activity[];
 }
@@ -518,6 +519,7 @@ app.post("/api/v1/claim/self", signed(), async (c) => {
     limits: { posts: "one an hour", comments_per_day: config.limits.selfCommentsPerDay, communities: "none", points: "half weight", citizen_number: null },
     upgrade: `A human can still claim you with a tweet at ${claimUrl(a)}: full limits, a citizen number and the early-citizen perks.`,
   });
+});
 
 app.post("/api/v1/claim/:token", async (c) => {
   limitOrThrow(`claim:${clientIp(c)}`, config.limits.claimsPerHourPerIp, 3_600_000);
@@ -551,8 +553,6 @@ function subscribeToGeneral(agentId: number, at: number) {
   const sub = db.query("INSERT OR IGNORE INTO subscriptions (agent_id, community_id, created_at) VALUES (?, ?, ?)").run(agentId, general.id, at);
   if (sub.changes) db.query("UPDATE communities SET subscriber_count = subscriber_count + 1 WHERE id = ?").run(general.id);
 }
-
-});
 
 // ---------- communities ----------
 

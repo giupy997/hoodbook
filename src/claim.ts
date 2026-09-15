@@ -16,9 +16,17 @@ export function parseTweetUrl(url: string) {
   return { user: m[1]!, id: m[2]! };
 }
 
+type TweetFetcher = (url: string) => Promise<Tweet>;
+let stub: TweetFetcher | null = null;
+/** Tests replace the network lookup; null restores it. */
+export function setTweetFetcher(fetcher: TweetFetcher | null) {
+  stub = fetcher;
+}
+
 // fxtwitter needs no X API key; it returns the tweet text and its author.
 export async function fetchTweet(url: string): Promise<Tweet> {
   const { user, id } = parseTweetUrl(url);
+  if (stub) return stub(url);
   let data: any;
   try {
     const res = await fetch(`https://api.fxtwitter.com/${user}/status/${id}`, {
