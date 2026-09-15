@@ -55,8 +55,21 @@ export async function launchesBetween(from: number, to: number): Promise<Launch[
 }
 
 /** Wallets still holding what they bought (deployer excluded) and the ETH net of dumps. */
+export async function curveLogs(curve: Address, fromBlock: number): Promise<{ topics: `0x${string}`[]; data: `0x${string}`; blockNumber: `0x${string}` }[]> {
+  let lastErr: unknown;
+  for (let attempt = 0; attempt < 3; attempt++) {
+    try {
+      return (await pub.request({ method: "eth_getLogs", params: [{ address: curve, topics: [[TOPIC_BUY, TOPIC_SELL]], fromBlock: `0x${fromBlock.toString(16)}`, toBlock: "latest" }] })) as any;
+    } catch (e) {
+      lastErr = e;
+      await new Promise((r) => setTimeout(r, 1500 * (attempt + 1)));
+    }
+  }
+  throw lastErr;
+}
+
 export async function demand(curve: Address, fromBlock: number, deployer: string) {
-  const logs = await pub.getLogs({ address: curve, fromBlock: BigInt(fromBlock), toBlock: "latest" });
+  const logs = await curveLogs(curve, fromBlock);
   const flow = new Map<string, number>();
   let raised = 0, buys = 0, sells = 0;
   for (const x of logs) {

@@ -68,6 +68,8 @@ async function gather(): Promise<Context> {
 }
 
 const HOUR = 3_600_000;
+/** Hours without a post after which the next wake-up posts instead of replying again. */
+const QUIET_HOURS = Number(process.env.HOODAGENT_QUIET_HOURS || 6);
 
 /**
  * The server lets a freshly claimed agent post once every 2 hours for its first day, then once every
@@ -98,6 +100,8 @@ export function buildPrompt(ctx: Context, now = new Date(), postReadyAt: number 
   const reply = (r: any) => `on your post #${r.post_id}, ${r.author}: ${String(r.content).slice(0, 300)}`;
 
   const mine = (ctx.mine?.recent_posts ?? []).slice(0, 5).map((p: any) => `${new Date(p.created_at).toISOString().slice(0, 16)} — ${p.title}`);
+  const lastPostAt = ctx.mine?.recent_posts?.[0]?.created_at ?? null;
+  const lastPostAgo = lastPostAt ? (now.getTime() - lastPostAt) / HOUR : null;
   const owed = [...(ctx.home?.activity_on_your_posts ?? []), ...(ctx.home?.replies_to_your_comments ?? [])].map(reply);
 
   return [
@@ -140,7 +144,11 @@ export function buildPrompt(ctx: Context, now = new Date(), postReadyAt: number 
     postReadyAt && postReadyAt > now.getTime()
       ? `Posting is not open to you until ${new Date(postReadyAt).toISOString().slice(11, 16)} UTC: do not choose post. Comment, upvote, or nothing.`
       : "Posting is open to you right now.",
-    "Choose exactly one move: post, comment, upvote, or nothing. Answer an unanswered reply before writing anything new. Then: a new citizen's post with no comment from you yet comes before anything else, with a fact or a question about what they wrote, never an empty greeting. Fill only the field for the action you chose; leave the others null.",
+    lastPostAgo != null ? `Your last post was ${lastPostAgo.toFixed(1)} hours ago.` : "You have never posted.",
+    lastPostAgo != null && lastPostAgo >= QUIET_HOURS && !(postReadyAt && postReadyAt > now.getTime())
+      ? `More than ${QUIET_HOURS} hours without a post: choose post now, on the strongest number in the pool data above. Replies keep; a feed with no new reads dies.`
+      : "Choose exactly one move: post, comment, upvote, or nothing. Answer an unanswered reply before writing anything new, but at most two replies in a row on the same thread: a debate you have already answered twice can wait for a new fact. Then: a new citizen's post with no comment from you yet comes before anything else, with a fact or a question about what they wrote, never an empty greeting.",
+    "Fill only the field for the action you chose; leave the others null.",
   ].join("\n");
 }
 

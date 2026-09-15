@@ -221,10 +221,25 @@ async function newLaunches(state: State): Promise<Launch[]> {
 // the first block and dumped a minute later count for nothing, which is the whole point of the filter.
 // Also: the ETH that changed hands on the curve in the last VOL_WINDOW_S seconds (buys and sells, everyone),
 // which is the volume the strategy chases. Blocks are ~2 s apart, so the window is measured in blocks.
+// The public RPC drops unfiltered eth_getLogs on curve addresses now and then ("internal server error"), so
+// ask only for the two trade events and retry a few times before giving up on this launch for this pass.
+async function curveLogs(curve: Address, fromBlock: number): Promise<{ topics: Hex[]; data: Hex; blockNumber: Hex }[]> {
+  let lastErr: unknown;
+  for (let attempt = 0; attempt < 3; attempt++) {
+    try {
+      return (await pub.request({ method: "eth_getLogs", params: [{ address: curve, topics: [[TOPIC_BUY, TOPIC_SELL]], fromBlock: `0x${fromBlock.toString(16)}`, toBlock: "latest" }] })) as any;
+    } catch (e) {
+      lastErr = e;
+      await new Promise((r) => setTimeout(r, 1500 * (attempt + 1)));
+    }
+  }
+  throw lastErr;
+}
+
 async function demand(l: Launch) {
   const latest = Number(await pub.getBlockNumber());
   const windowFrom = latest - Math.ceil(CFG.VOL_WINDOW_S / 2);
-  const logs = await pub.getLogs({ address: l.curve, fromBlock: BigInt(l.block), toBlock: "latest" });
+  const logs = await curveLogs(l.curve, l.block);
   const flow = new Map<string, number>();
   let raised = 0, volWindow = 0;
   for (const x of logs) {
@@ -233,7 +248,7 @@ async function demand(l: Launch) {
     const who = ("0x" + x.topics[1]!.slice(26)).toLowerCase();
     // CurveBuy data: (ethIn, tokensOut, ...); CurveSell data: (tokensIn, ethOut, ...)
     const amount = Number(formatEther(BigInt("0x" + x.data.slice(isBuy ? 2 : 66, isBuy ? 66 : 130))));
-    if (Number(x.blockNumber ?? 0n) >= windowFrom) volWindow += amount;
+    if (Number(x.blockNumber ?? 0) >= windowFrom) volWindow += amount;
     if (who === l.deployer.toLowerCase()) continue;
     flow.set(who, (flow.get(who) ?? 0) + (isBuy ? amount : -amount));
     raised += isBuy ? amount : -amount;
@@ -449,7 +464,13 @@ async function pass(state: State, acc: PrivateKeyAccount, dry: boolean) {
   await manage(state, acc);
   for (let i = 0; i < pending.length; i++) {
     const l = pending[i]!;
-    const v = await judge(l, state, acc.address);
+    let v: Verdict;
+    try {
+      v = await judge(l, state, acc.address);
+    } catch (e) {
+      log(`judge ${l.token} failed, will retry next pass: ${String(e).split("\n")[0]}`);
+      continue;
+    }
     if (!v.ok) {
       if (v.why !== "too young" && !v.why.startsWith("demand")) { pending.splice(i--, 1); state.skipped[l.token] = v.why; }
       continue;

@@ -24,6 +24,8 @@ const BASE = (process.env.HOODBOOK_URL || "https://api.hoodbook.tech").replace(/
 const HOME = process.env.CROWD_HOME || join(import.meta.dir, "..", "data", "crowd");
 const MODEL = process.env.CROWD_MODEL || "claude-sonnet-5";
 const PER_TICK = Number(process.env.CROWD_PER_TICK || 2); // personas that act in one round
+const COMMENTS_PER_DAY = 20; // the server's limit for self-verified agents, tracked here to avoid pointless model calls
+const PER_POST_PER_DAY = Number(process.env.CROWD_PER_POST || 3); // one persona's comments on one post per day
 const MAX_TICKS_PER_DAY = Number(process.env.CROWD_MAX_TICKS || 60);
 const FUND_ETH = process.env.CROWD_FUND_ETH || "0.0002";
 const HOUSE = new Set(["hoodagent", "hoodape", "hood402"]);
@@ -116,7 +118,7 @@ async function gather(acc: PrivateKeyAccount): Promise<Snapshot> {
   return { me, continuity, hot, fresh, citizens, recentComments };
 }
 
-function prompt(p: (typeof PERSONAS)[number], s: Snapshot): string {
+function prompt(p: (typeof PERSONAS)[number], s: Snapshot, saturated: number[] = []): string {
   const week = Date.now() - 7 * 86_400_000;
   const newcomers = new Set(s.citizens.filter((a: any) => a.claimed_at > week && !HOUSE.has(a.name) && !PERSONAS.some((q) => q.name === a.name)).map((a: any) => a.name));
   const regulars = new Set(PERSONAS.map((q) => q.name));
@@ -139,18 +141,19 @@ function prompt(p: (typeof PERSONAS)[number], s: Snapshot): string {
     ...(s.hot?.posts ?? []).filter((x: any) => !(s.fresh?.posts ?? []).some((f: any) => f.id === x.id)).slice(0, 4).map(post),
     "</untrusted_content>",
     "",
-    "Pick one move. For comment or reply set post_id (and parent_id for a reply) and text. For upvote set post_id. For post set community, title, content. Leave the other fields null. Do not comment twice on the same post; do not answer your own comments.",
+    saturated.length ? `Threads where you have said enough today (do not comment there again): ${saturated.map((id) => "#" + id).join(", ")}.` : "",
+    "Pick one move. For comment or reply set post_id (and parent_id for a reply) and text. For upvote set post_id. For post set community, title, content. Leave the other fields null. Do not answer your own comments. Spread out: a post with fewer comments, or a house desk post nobody has answered, beats piling a twentieth comment on the busiest thread. Nothing is a fine move when there is no new fact to react to.",
   ].join("\n");
 }
 
-async function decide(p: (typeof PERSONAS)[number], s: Snapshot): Promise<Decision> {
+async function decide(p: (typeof PERSONAS)[number], s: Snapshot, saturated: number[] = []): Promise<Decision> {
   const client = new Anthropic();
   const r = await client.messages.parse({
     model: MODEL,
     max_tokens: 1500,
     output_config: { effort: "low", format: zodOutputFormat(Decision) },
     system: [{ type: "text", text: SYSTEM(p), cache_control: { type: "ephemeral" } }],
-    messages: [{ role: "user", content: prompt(p, s) }],
+    messages: [{ role: "user", content: prompt(p, s, saturated) }],
   });
   if (!r.parsed_output) throw new Error("no decision");
   return r.parsed_output;
@@ -226,27 +229,45 @@ const commands: Record<string, (arg?: string) => Promise<void>> = {
     const today = new Date().toISOString().slice(0, 10);
     const ticks = state.day === today ? state.ticks ?? 0 : 0;
     if (ticks >= MAX_TICKS_PER_DAY) { log(`daily tick budget spent (${ticks}/${MAX_TICKS_PER_DAY})`); return; }
-    // rotate: the personas who acted least recently go first
+    // rotate: the personas who acted least recently go first, skipping anyone out of daily comment quota
     const last: Record<string, number> = state.last ?? {};
-    const order = [...PERSONAS].sort((a, b) => (last[a.name] ?? 0) - (last[b.name] ?? 0)).slice(0, PER_TICK);
+    // comments each persona made, as {post_id, at}, kept 24 h: the server allows 20 a day per self-verified agent
+    const made: Record<string, { post: number; at: number }[]> = state.made ?? {};
+    const dayAgo = Date.now() - 86_400_000;
+    for (const n of Object.keys(made)) made[n] = made[n]!.filter((c) => c.at > dayAgo);
+    const quotaLeft = (name: string) => COMMENTS_PER_DAY - (made[name]?.length ?? 0);
+    const order = [...PERSONAS].filter((p) => quotaLeft(p.name) > 0).sort((a, b) => (last[a.name] ?? 0) - (last[b.name] ?? 0)).slice(0, PER_TICK);
+    if (!order.length) log(`every persona is out of comment quota for now`);
     for (const p of order) {
       try {
         const acc = account(p.name);
         const snap = await gather(acc);
         if (snap.me.agent.status !== "active") { log(`${p.name}: not verified yet`); continue; }
-        const d = await decide(p, snap);
+        const perPost = new Map<number, number>();
+        for (const c of made[p.name] ?? []) perPost.set(c.post, (perPost.get(c.post) ?? 0) + 1);
+        const saturated = [...perPost].filter(([, n]) => n >= PER_POST_PER_DAY).map(([id]) => id);
+        const d = await decide(p, snap, saturated);
         log(`${p.name}: ${d.action} — ${d.reasoning}`);
+        if ((d.action === "comment" || d.action === "reply") && d.post_id != null && saturated.includes(d.post_id)) {
+          log(`${p.name}: already said ${PER_POST_PER_DAY} things on #${d.post_id} today, skipping`);
+          last[p.name] = Date.now();
+          continue;
+        }
         if (dry) { log(`${p.name} would: ${JSON.stringify({ post_id: d.post_id, parent_id: d.parent_id, text: d.text, title: d.title })}`); continue; }
         const done = await act(acc, d);
         log(`${p.name}: ${done}`);
+        if ((d.action === "comment" || d.action === "reply") && d.post_id != null) (made[p.name] ??= []).push({ post: d.post_id, at: Date.now() });
         if (d.action !== "nothing") await call(acc, "POST", "/api/v1/agents/me/checkpoint", { focus: `Last move: ${done.slice(0, 160)}` }).catch(() => {});
         last[p.name] = Date.now();
       } catch (e) {
-        log(`${p.name}: ${String(e).split("\n")[0]}`);
+        const msg = String(e).split("\n")[0]!;
+        log(`${p.name}: ${msg}`);
+        // the server said no more comments today: mark the quota as spent locally so the next ticks skip the model call
+        if (msg.includes("comment_daily_limit")) made[p.name] = Array.from({ length: COMMENTS_PER_DAY }, () => ({ post: 0, at: Date.now() - 3_600_000 }));
         last[p.name] = Date.now();
       }
     }
-    if (!dry) writeState({ ...state, day: today, ticks: ticks + 1, last });
+    if (!dry) writeState({ ...state, day: today, ticks: ticks + 1, last, made });
   },
   async status() {
     for (const p of PERSONAS) {
